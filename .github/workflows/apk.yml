@@ -1,0 +1,50 @@
+name: APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Aláíró kulcs
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > app/fokusz.keystore
+          fi
+          test -f app/fokusz.keystore
+
+      - name: APK építése
+        env:
+          KS_PASS: ${{ secrets.KS_PASS }}
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Átnevezés
+        run: cp app/build/outputs/apk/release/app-release.apk fokusz-launcher.apk
+
+      - name: Kiadás
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Fókusz 1.0.${{ github.run_number }}
+          body: "Letöltés: fokusz-launcher.apk"
+          files: fokusz-launcher.apk
+          make_latest: true
