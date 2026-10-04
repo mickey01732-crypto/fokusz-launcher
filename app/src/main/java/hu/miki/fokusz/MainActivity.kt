@@ -59,10 +59,10 @@ class MainActivity : Activity() {
         private val SLOTS = listOf(
             Slot("Telefon", listOf("com.samsung.android.dialer", "com.google.android.dialer", "com.android.dialer")),
             Slot("Üzenetek", listOf("com.samsung.android.messaging", "com.google.android.apps.messaging")),
-            Slot("Naptár", listOf("com.samsung.android.calendar", "com.google.android.calendar")),
+            Slot("Naptár", listOf("com.google.android.calendar", "com.samsung.android.calendar")),
             Slot("Horizont", emptyList(), "horizont"),
             Slot("Waze", listOf("com.waze")),
-            Slot("Keep", listOf("com.google.android.keep")),
+            Slot("Claude", listOf("com.anthropic.claude"), "claude"),
         )
 
         private val DEFAULT_RESTRICTED = setOf(
