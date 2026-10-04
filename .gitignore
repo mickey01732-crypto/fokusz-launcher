@@ -2,5 +2,6 @@
 build/
 local.properties
 *.keystore
+!app/fokusz.keystore
 *.jks
 .idea/

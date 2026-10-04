@@ -3,6 +3,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+val ksPass = System.getenv("KS_PASS")?.takeIf { it.isNotBlank() } ?: "j1W_Bi51OFx9gPFU6Ig-TsJi"
 val runNumber = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
 
 android {
@@ -20,9 +21,9 @@ android {
     signingConfigs {
         create("fokusz") {
             storeFile = file("fokusz.keystore")
-            storePassword = System.getenv("KS_PASS") ?: ""
+            storePassword = ksPass
             keyAlias = "fokusz"
-            keyPassword = System.getenv("KS_PASS") ?: ""
+            keyPassword = ksPass
         }
     }
 
