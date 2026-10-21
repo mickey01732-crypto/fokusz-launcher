@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.RectF
 import android.view.MotionEvent
 import android.view.View
 import android.widget.FrameLayout
@@ -13,8 +14,12 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 
-/** Letisztult analóg óra: számlap számok nélkül, arany 12-es jel és középpont. */
+/** Letisztult analóg óra; fókuszblokk alatt arany ív mutatja a hátralévő időt. */
 class ClockView(ctx: Context, private val accent: Int) : View(ctx) {
+
+    /** A fókuszblokk vége (ms), 0 ha nincs aktív blokk. */
+    var focusEnd: Long = 0L
+        set(v) { field = v; invalidate() }
 
     private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; color = Color.parseColor("#3A3631"); strokeWidth = 1f
@@ -31,7 +36,11 @@ class ClockView(ctx: Context, private val accent: Int) : View(ctx) {
     private val minuteHand = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; color = Color.parseColor("#EDE6D8"); strokeWidth = 1.5f; strokeCap = Paint.Cap.ROUND
     }
+    private val arc = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; color = accent; strokeWidth = 3f; strokeCap = Paint.Cap.ROUND
+    }
     private val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = accent }
+    private val arcBox = RectF(8f, 8f, 192f, 192f)
 
     override fun onDraw(c: Canvas) {
         super.onDraw(c)
@@ -39,14 +48,23 @@ class ClockView(ctx: Context, private val accent: Int) : View(ctx) {
         c.save()
         c.scale(s, s)
         c.drawCircle(100f, 100f, 96f, ring)
+
+        val cal = Calendar.getInstance()
+        val m = cal.get(Calendar.MINUTE) + cal.get(Calendar.SECOND) / 60f
+        val h = (cal.get(Calendar.HOUR) % 12) + m / 60f
+
+        val now = System.currentTimeMillis()
+        if (focusEnd > now) {
+            val leftMin = (focusEnd - now) / 60_000f
+            val startDeg = m * 6f - 90f
+            c.drawArc(arcBox, startDeg, (leftMin.coerceAtMost(59.9f)) * 6f, false, arc)
+        }
+
         c.drawLine(100f, 10f, 100f, 24f, tickGold)
         c.drawLine(176f, 100f, 190f, 100f, tick)
         c.drawLine(100f, 176f, 100f, 190f, tick)
         c.drawLine(10f, 100f, 24f, 100f, tick)
 
-        val cal = Calendar.getInstance()
-        val m = cal.get(Calendar.MINUTE) + cal.get(Calendar.SECOND) / 60f
-        val h = (cal.get(Calendar.HOUR) % 12) + m / 60f
         hand(c, h * 30f, 50f, hourHand)
         hand(c, m * 6f, 78f, minuteHand)
         c.drawCircle(100f, 100f, 4f, dot)
@@ -63,12 +81,14 @@ class ClockView(ctx: Context, private val accent: Int) : View(ctx) {
     }
 }
 
-/** Gyökér, ami felismeri a függőleges húzást (fel: összes app, le: értesítések). */
+/** Gyökér, ami felismeri a húzásokat (fel: összes app, le: értesítések, balra: jegyzet). */
 class SwipeFrame(ctx: Context) : FrameLayout(ctx) {
     var canSwipeUp: () -> Boolean = { false }
     var canSwipeDown: () -> Boolean = { false }
+    var canSwipeLeft: () -> Boolean = { false }
     var onSwipeUp: () -> Unit = {}
     var onSwipeDown: () -> Unit = {}
+    var onSwipeLeft: () -> Unit = {}
 
     private var downX = 0f
     private var downY = 0f
@@ -84,6 +104,9 @@ class SwipeFrame(ctx: Context) : FrameLayout(ctx) {
                 if (abs(dy) > threshold && abs(dy) > abs(dx) * 1.5f) {
                     if (dy < 0 && canSwipeUp()) { fired = true; onSwipeUp(); return true }
                     if (dy > 0 && canSwipeDown()) { fired = true; onSwipeDown(); return true }
+                }
+                if (dx < -threshold && abs(dx) > abs(dy) * 1.5f && canSwipeLeft()) {
+                    fired = true; onSwipeLeft(); return true
                 }
             }
         }

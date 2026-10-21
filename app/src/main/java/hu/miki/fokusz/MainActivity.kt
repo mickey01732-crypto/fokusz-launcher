@@ -1,5 +1,6 @@
 package hu.miki.fokusz
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.TimePickerDialog
@@ -8,7 +9,9 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.ContentUris
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
@@ -18,11 +21,15 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.CalendarContract
 import android.provider.Settings
 import android.text.Editable
+import android.text.TextUtils
 import android.text.TextWatcher
 import android.util.TypedValue
+import android.view.GestureDetector
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
@@ -95,12 +102,26 @@ class MainActivity : Activity() {
     private lateinit var clock: ClockView
     private lateinit var dateText: TextView
     private lateinit var slotViews: List<TextView>
+    private lateinit var eventText: TextView
+    private lateinit var focusLabel: TextView
+    private lateinit var sayingJp: TextView
+    private lateinit var sayingHu: TextView
+    private lateinit var note: LinearLayout
+    private lateinit var noteInput: EditText
+    private var nextEvent: NextEvent? = null
 
     private var apps: List<AppEntry> = emptyList()
     private var drawerOpen = false
     private val handler = Handler(Looper.getMainLooper())
     private var pauseTarget: AppEntry? = null
     private var pauseLeft = 0
+
+    private val focusTick = object : Runnable {
+        override fun run() {
+            refreshFocus()
+            if (Focus.end(this@MainActivity) > 0) handler.postDelayed(this, 15_000)
+        }
+    }
 
     private val tick = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) = refreshTime()
@@ -124,16 +145,20 @@ class MainActivity : Activity() {
         buildDrawer()
         buildCsend()
         buildPause()
+        buildNote()
         val full = FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
         root.addView(home, full)
         root.addView(drawer, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(csend, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        root.addView(note, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(pause, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
 
-        root.canSwipeUp = { !drawerOpen && csend.visibility != View.VISIBLE && pause.visibility != View.VISIBLE }
-        root.canSwipeDown = { !drawerOpen && pause.visibility != View.VISIBLE }
+        root.canSwipeUp = { homeIdle() }
+        root.canSwipeDown = { !drawerOpen && pause.visibility != View.VISIBLE && note.visibility != View.VISIBLE }
+        root.canSwipeLeft = { homeIdle() }
         root.onSwipeUp = { openDrawer() }
         root.onSwipeDown = { expandNotifications() }
+        root.onSwipeLeft = { openNote() }
 
         root.setOnApplyWindowInsetsListener { _, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
@@ -142,6 +167,7 @@ class MainActivity : Activity() {
             drawer.setPadding(dp(36), bars.top + dp(40), dp(36), maxOf(bars.bottom, ime.bottom) + dp(20))
             csend.setPadding(dp(36), bars.top + dp(96), dp(36), bars.bottom + dp(48))
             pause.setPadding(dp(36), bars.top + dp(48), dp(36), bars.bottom + dp(48))
+            note.setPadding(dp(36), bars.top + dp(56), dp(36), maxOf(bars.bottom, ime.bottom) + dp(24))
             insets
         }
         setContentView(root)
@@ -159,18 +185,30 @@ class MainActivity : Activity() {
         loadApps()
         refreshSlots()
         refreshTime()
+        refreshSaying()
         if (drawerOpen) renderDrawer()
+        Weather.refreshIfStale(this) { runOnUiThread { refreshTime() } }
+        askCalendarOnce()
+        handler.removeCallbacks(focusTick)
+        handler.post(focusTick)
     }
 
     override fun onPause() {
         super.onPause()
         try { unregisterReceiver(tick) } catch (_: Exception) {}
+        handler.removeCallbacks(focusTick)
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        refreshEvent()
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         // Home gomb: vissza a tiszta kezdőképernyőre
         hidePause()
+        hideNote()
         closeDrawer()
     }
 
@@ -178,6 +216,7 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         when {
             pause.visibility == View.VISIBLE -> hidePause()
+            note.visibility == View.VISIBLE -> hideNote()
             drawerOpen -> closeDrawer()
             else -> Unit // a kezdőképernyőről nincs hova visszalépni
         }
@@ -201,6 +240,16 @@ class MainActivity : Activity() {
         dateText = label("", 19f, fItal, MUTED).apply { letterSpacing = 0.02f }
         home.addView(dateText, lp().apply { topMargin = dp(18) })
 
+        eventText = label("", 17f, fItal, MUTED2).apply {
+            isSingleLine = true
+            ellipsize = TextUtils.TruncateAt.END
+            minHeight = dp(32)
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+            setOnClickListener { openEvent() }
+        }
+        home.addView(eventText, lp(MATCH_PARENT).apply { topMargin = dp(2) })
+
         home.addView(View(this).apply { setBackgroundColor(GOLD) },
             LinearLayout.LayoutParams(dp(40), dp(1)).apply { topMargin = dp(36); bottomMargin = dp(28) })
 
@@ -216,13 +265,208 @@ class MainActivity : Activity() {
 
         home.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
 
-        home.addView(label("FÓKUSZ · BE", 13f, fSemi, GOLD).apply { letterSpacing = 0.23f }, lp())
-        home.addView(label("Egyszerre egy dolog.", 16f, fItal, MUTED), lp().apply { topMargin = dp(6) })
+        focusLabel = label("FÓKUSZ · BE", 13f, fSemi, GOLD).apply {
+            letterSpacing = 0.23f
+            minHeight = dp(40)
+            gravity = Gravity.CENTER_VERTICAL
+            setOnClickListener { focusMenu() }
+        }
+        home.addView(focusLabel, lp())
+
+        val saying = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            isClickable = true
+            setOnClickListener { showSaying() }
+        }
+        sayingJp = label("", 17f, Typeface.create(Typeface.SERIF, Typeface.NORMAL), GOLD)
+        sayingHu = label("", 16f, fItal, MUTED)
+        saying.addView(sayingJp, lp())
+        saying.addView(sayingHu, lp().apply { topMargin = dp(4) })
+        home.addView(saying, lp(MATCH_PARENT).apply { topMargin = dp(2) })
+
+        val taps = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onDoubleTap(e: MotionEvent): Boolean { lockScreen(); return true }
+        })
+        home.setOnTouchListener { _, ev -> taps.onTouchEvent(ev); false }
+    }
+
+    private fun homeIdle() = !drawerOpen && csend.visibility != View.VISIBLE &&
+        pause.visibility != View.VISIBLE && note.visibility != View.VISIBLE
+
+    // ---------- naptár ----------
+
+    private fun askCalendarOnce() {
+        if (checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED) return
+        if (prefs.getBoolean("cal_asked", false)) return
+        prefs.edit().putBoolean("cal_asked", true).apply()
+        requestPermissions(arrayOf(Manifest.permission.READ_CALENDAR), 1)
+    }
+
+    private fun refreshEvent() {
+        val ok = checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
+        nextEvent = if (ok) Agenda.next(this) else null
+        val e = nextEvent
+        if (e == null) {
+            eventText.visibility = View.GONE
+        } else {
+            eventText.text = Agenda.format(e, prefs.getBoolean("cal_discreet", false))
+            eventText.visibility = View.VISIBLE
+        }
+    }
+
+    private fun openEvent() {
+        val e = nextEvent ?: return
+        val i = Intent(Intent.ACTION_VIEW, ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, e.id))
+            .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, e.begin)
+            .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, e.end)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (apps.any { it.pkg == "com.google.android.calendar" }) i.setPackage("com.google.android.calendar")
+        try { startActivity(i) } catch (_: Exception) { i.setPackage(null); safeStart(i) }
+    }
+
+    // ---------- japán gondolat ----------
+
+    private fun refreshSaying() {
+        val s = Sayings.today()
+        sayingJp.text = s.jp
+        sayingHu.text = s.hu
+    }
+
+    private fun showSaying() {
+        val s = Sayings.today()
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("${s.jp}  ·  ${s.reading}")
+            .setMessage("${s.hu}\n\n${s.note}")
+            .setPositiveButton("Rendben", null)
+            .show()
+    }
+
+    // ---------- fókusz-időzítő ----------
+
+    private fun refreshFocus() {
+        val end = Focus.end(this)
+        clock.focusEnd = end
+        focusLabel.text = if (end > 0) {
+            val left = ((end - System.currentTimeMillis() + 59_999) / 60_000).toInt()
+            "FÓKUSZ · $left PERC"
+        } else "FÓKUSZ · BE"
+    }
+
+    private fun focusMenu() {
+        val end = Focus.end(this)
+        val dlg = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+        if (end > 0) {
+            val left = ((end - System.currentTimeMillis() + 59_999) / 60_000).toInt()
+            dlg.setTitle("Még $left perc")
+                .setItems(arrayOf("Folytatom", "Befejezem most")) { _, which ->
+                    if (which == 1) { Focus.stop(this); refreshFocus() }
+                }
+        } else {
+            dlg.setTitle("Mélymunka-blokk")
+                .setItems(arrayOf("25 perc", "50 perc")) { _, which ->
+                    if (Build.VERSION.SDK_INT >= 33 &&
+                        checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                    ) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
+                    Focus.start(this, if (which == 0) 25 else 50)
+                    handler.removeCallbacks(focusTick)
+                    handler.post(focusTick)
+                }
+        }
+        dlg.show()
+    }
+
+    // ---------- dupla koppintás: zárolás ----------
+
+    private fun lockScreen() {
+        val svc = LockService.instance
+        if (svc != null) { svc.lock(); return }
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Zárolás dupla koppintással")
+            .setMessage(
+                "Ehhez egyszer be kell kapcsolni a Fókuszt a Kisegítő lehetőségek között:\n\n" +
+                    "Kisegítő lehetőségek → Telepített alkalmazások → Fókusz → Be.\n\n" +
+                    "Ha a kapcsoló szürke: Alkalmazás infó → jobb felső ⋮ → " +
+                    "„Korlátozott beállítások engedélyezése”, utána újra próbáld."
+            )
+            .setPositiveButton("Kisegítő lehetőségek") { _, _ -> safeStart(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+            .setNeutralButton("Alkalmazás infó") { _, _ ->
+                safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            }
+            .setNegativeButton("Később", null)
+            .show()
+    }
+
+    // ---------- gyorsjegyzet ----------
+
+    private fun buildNote() {
+        note = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = ColorDrawable(Color.parseColor("#F2121214"))
+            visibility = View.GONE
+            isClickable = true
+        }
+        note.addView(label("JEGYZET", 13f, fSemi, GOLD).apply { letterSpacing = 0.23f }, lp())
+        noteInput = EditText(this).apply {
+            background = null
+            setPadding(0, dp(12), 0, dp(12))
+            textSize = 24f
+            typeface = fItal
+            setTextColor(INK)
+            setHintTextColor(Color.parseColor("#6E685E"))
+            hint = "Mit ne felejts el?"
+            gravity = Gravity.TOP or Gravity.START
+            minLines = 3
+        }
+        note.addView(noteInput, lp(MATCH_PARENT))
+        note.addView(View(this).apply { setBackgroundColor(LINE) },
+            LinearLayout.LayoutParams(MATCH_PARENT, dp(1)).apply { bottomMargin = dp(24) })
+        note.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        note.addView(outlineButton("Mentés a Keepbe").apply { setOnClickListener { saveNote() } }, lp())
+        note.addView(label("Mégse", 18f, fMed, MUTED).apply {
+            minHeight = dp(48)
+            gravity = Gravity.CENTER_VERTICAL
+            setOnClickListener { hideNote() }
+        }, lp().apply { topMargin = dp(8) })
+    }
+
+    private fun openNote() {
+        note.alpha = 0f
+        note.translationX = dp(32).toFloat()
+        note.visibility = View.VISIBLE
+        note.animate().alpha(1f).translationX(0f).setDuration(180).start()
+        noteInput.requestFocus()
+        handler.postDelayed({
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                .showSoftInput(noteInput, InputMethodManager.SHOW_IMPLICIT)
+        }, 200)
+    }
+
+    private fun hideNote() {
+        if (note.visibility != View.VISIBLE) return
+        hideKeyboard()
+        noteInput.clearFocus()
+        note.visibility = View.GONE
+    }
+
+    private fun saveNote() {
+        val text = noteInput.text.toString().trim()
+        if (text.isEmpty()) { hideNote(); return }
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+        val keep = "com.google.android.keep"
+        val hasKeep = try { packageManager.getPackageInfo(keep, 0); true } catch (_: Exception) { false }
+        if (hasKeep) send.setPackage(keep)
+        safeStart(if (hasKeep) send else Intent.createChooser(send, "Jegyzet mentése"))
+        noteInput.setText("")
+        hideNote()
     }
 
     private fun refreshTime() {
         clock.invalidate()
-        dateText.text = SimpleDateFormat("EEEE · MMMM d.", Locale("hu")).format(Date())
+        val date = SimpleDateFormat("EEEE · MMMM d.", Locale("hu")).format(Date())
+        dateText.text = Weather.cached(this)?.let { "$date · $it" } ?: date
+        refreshEvent()
+        refreshFocus()
+        refreshSaying()
         updateCsend()
     }
 
@@ -540,6 +784,7 @@ class MainActivity : Activity() {
         if (show && csend.visibility != View.VISIBLE) {
             closeDrawer()
             hidePause()
+            hideNote()
             hideKeyboard()
         }
         csend.visibility = if (show) View.VISIBLE else View.GONE
@@ -555,6 +800,9 @@ class MainActivity : Activity() {
             "Csend mód: ${if (on) "be" else "ki"}",
             "Csend kezdete: ${hm(start)}",
             "Csend vége: ${hm(end)}",
+            "Naptár: ${if (prefs.getBoolean("cal_discreet", false)) "diszkrét (csak idő és hely)" else "teljes"}",
+            "Naptár hozzáférés",
+            "Zárolás dupla koppintással",
             "Háttérkép beállítása",
             "Kezdőképernyő-app választása",
         )
@@ -565,8 +813,18 @@ class MainActivity : Activity() {
                     0 -> { prefs.edit().putBoolean("csend_on", !on).apply(); updateCsend() }
                     1 -> pickTime(start) { prefs.edit().putInt("csend_start", it).apply(); updateCsend() }
                     2 -> pickTime(end) { prefs.edit().putInt("csend_end", it).apply(); updateCsend() }
-                    3 -> safeStart(Intent.createChooser(Intent(Intent.ACTION_SET_WALLPAPER), "Háttérkép"))
-                    4 -> safeStart(Intent(Settings.ACTION_HOME_SETTINGS))
+                    3 -> {
+                        prefs.edit().putBoolean("cal_discreet", !prefs.getBoolean("cal_discreet", false)).apply()
+                        refreshEvent()
+                    }
+                    4 -> if (checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED)
+                        safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+                    else requestPermissions(arrayOf(Manifest.permission.READ_CALENDAR), 1)
+                    5 -> if (LockService.instance != null)
+                        safeStart(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    else lockScreen()
+                    6 -> safeStart(Intent.createChooser(Intent(Intent.ACTION_SET_WALLPAPER), "Háttérkép"))
+                    7 -> safeStart(Intent(Settings.ACTION_HOME_SETTINGS))
                 }
             }
             .show()
