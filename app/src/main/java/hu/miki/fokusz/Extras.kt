@@ -1,6 +1,8 @@
 package hu.miki.fokusz
 
 import android.app.AlarmManager
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -83,9 +85,64 @@ object Focus {
 
 class FocusReceiver : BroadcastReceiver() {
     override fun onReceive(ctx: Context, intent: Intent?) {
-        ctx.getSharedPreferences("fokusz", Context.MODE_PRIVATE).edit()
-            .remove("focus_start").remove("focus_end").apply()
+        val p = ctx.getSharedPreferences("fokusz", Context.MODE_PRIVATE)
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        val days = (p.getStringSet("focus_days", emptySet()) ?: emptySet()).toMutableSet()
+        days.add(today)
+        // csak az utolsó ~40 napot őrizzük
+        val keep = days.sorted().takeLast(40).toSet()
+        p.edit().remove("focus_start").remove("focus_end").putStringSet("focus_days", keep).apply()
         Focus.notifyDone(ctx)
+    }
+}
+
+object Chain {
+    /** Hétfőtől vasárnapig: volt-e aznap befejezett fókuszblokk. */
+    fun week(ctx: Context): Pair<BooleanArray, Int> {
+        val days = ctx.getSharedPreferences("fokusz", Context.MODE_PRIVATE)
+            .getStringSet("focus_days", emptySet()) ?: emptySet()
+        val fmt = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val c = Calendar.getInstance()
+        val todayIdx = (c.get(Calendar.DAY_OF_WEEK) + 5) % 7 // hétfő = 0
+        c.add(Calendar.DAY_OF_YEAR, -todayIdx)
+        val out = BooleanArray(7)
+        for (i in 0 until 7) {
+            out[i] = fmt.format(c.time) in days
+            c.add(Calendar.DAY_OF_YEAR, 1)
+        }
+        return out to todayIdx
+    }
+}
+
+// ---------- autós mód (Bluetooth) ----------
+
+object Car {
+    fun isOn(ctx: Context): Boolean {
+        val p = ctx.getSharedPreferences("fokusz", Context.MODE_PRIVATE)
+        if (p.getString("car_addr", null) == null) return false
+        if (System.currentTimeMillis() < p.getLong("car_snooze_until", 0)) return false
+        return p.getBoolean("car_connected", false)
+    }
+}
+
+class CarReceiver : BroadcastReceiver() {
+    override fun onReceive(ctx: Context, intent: Intent) {
+        val p = ctx.getSharedPreferences("fokusz", Context.MODE_PRIVATE)
+        val addr = p.getString("car_addr", null) ?: return
+        when (intent.action) {
+            BluetoothAdapter.ACTION_STATE_CHANGED -> {
+                if (intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1) == BluetoothAdapter.STATE_OFF)
+                    p.edit().putBoolean("car_connected", false).apply()
+            }
+            else -> {
+                @Suppress("DEPRECATION")
+                val dev: BluetoothDevice? = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                if (dev?.address != addr) return
+                val connected = intent.action == BluetoothDevice.ACTION_ACL_CONNECTED
+                p.edit().putBoolean("car_connected", connected).remove("car_snooze_until").apply()
+            }
+        }
+        ctx.sendBroadcast(Intent("hu.miki.fokusz.CAR_CHANGED").setPackage(ctx.packageName))
     }
 }
 

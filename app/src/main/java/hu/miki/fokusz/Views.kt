@@ -81,6 +81,39 @@ class ClockView(ctx: Context, private val accent: Int) : View(ctx) {
     }
 }
 
+/** Hét pötty a hét napjaira (hétfő–vasárnap); arany, ha aznap volt befejezett fókuszblokk. */
+class DotsView(ctx: Context, private val accent: Int) : View(ctx) {
+    var done: BooleanArray = BooleanArray(7)
+        set(v) { field = v; invalidate() }
+    var todayIndex = 0
+        set(v) { field = v; invalidate() }
+
+    private val d = resources.displayMetrics.density
+    private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL; color = accent }
+    private val empty = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; color = Color.parseColor("#5A554D"); strokeWidth = 1f * d
+    }
+    private val today = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; color = Color.parseColor("#A8A193"); strokeWidth = 1f * d
+    }
+
+    override fun onDraw(c: Canvas) {
+        super.onDraw(c)
+        val r = 3f * d
+        val gap = 14f * d
+        val cy = height / 2f
+        for (i in 0 until 7) {
+            val cx = r + 1 * d + i * gap
+            when {
+                done[i] -> c.drawCircle(cx, cy, r, fill)
+                i == todayIndex -> c.drawCircle(cx, cy, r, today)
+                i < todayIndex -> c.drawCircle(cx, cy, r, empty)
+                else -> c.drawCircle(cx, cy, r * 0.45f, empty)
+            }
+        }
+    }
+}
+
 /** Gyökér, ami felismeri a húzásokat (fel: összes app, le: értesítések, balra: jegyzet). */
 class SwipeFrame(ctx: Context) : FrameLayout(ctx) {
     var canSwipeUp: () -> Boolean = { false }

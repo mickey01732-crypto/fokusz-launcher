@@ -4,6 +4,8 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.TimePickerDialog
+import android.bluetooth.BluetoothManager
+import android.os.BatteryManager
 import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
@@ -108,6 +110,10 @@ class MainActivity : Activity() {
     private lateinit var note: LinearLayout
     private lateinit var noteInput: EditText
     private var nextEvent: NextEvent? = null
+    private lateinit var seasonText: TextView
+    private lateinit var dots: DotsView
+    private lateinit var batteryText: TextView
+    private lateinit var car: LinearLayout
 
     private var apps: List<AppEntry> = emptyList()
     private var drawerOpen = false
@@ -124,6 +130,9 @@ class MainActivity : Activity() {
 
     private val tick = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) = refreshTime()
+    }
+    private val carChanged = object : BroadcastReceiver() {
+        override fun onReceive(c: Context?, i: Intent?) = updateCar()
     }
 
     // ---------- életciklus ----------
@@ -145,11 +154,13 @@ class MainActivity : Activity() {
         buildCsend()
         buildPause()
         buildNote()
+        buildCar()
         val full = FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
         root.addView(home, full)
         root.addView(drawer, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(csend, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(note, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        root.addView(car, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(pause, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
 
         root.canSwipeUp = { homeIdle() }
@@ -162,7 +173,8 @@ class MainActivity : Activity() {
         root.setOnApplyWindowInsetsListener { _, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
             val ime = insets.getInsets(WindowInsets.Type.ime())
-            home.setPadding(dp(36), bars.top + dp(72), dp(36), bars.bottom + dp(40))
+            home.setPadding(dp(36), bars.top + dp(44), dp(36), bars.bottom + dp(32))
+            car.setPadding(dp(36), bars.top + dp(56), dp(36), bars.bottom + dp(40))
             drawer.setPadding(dp(36), bars.top + dp(40), dp(36), maxOf(bars.bottom, ime.bottom) + dp(20))
             csend.setPadding(dp(36), bars.top + dp(96), dp(36), bars.bottom + dp(48))
             pause.setPadding(dp(36), bars.top + dp(48), dp(36), bars.bottom + dp(48))
@@ -181,6 +193,9 @@ class MainActivity : Activity() {
         }
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(tick, filter, Context.RECEIVER_NOT_EXPORTED)
         else registerReceiver(tick, filter)
+        val carFilter = IntentFilter("hu.miki.fokusz.CAR_CHANGED")
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(carChanged, carFilter, Context.RECEIVER_NOT_EXPORTED)
+        else registerReceiver(carChanged, carFilter)
         loadApps()
         refreshSlots()
         refreshTime()
@@ -195,12 +210,14 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         try { unregisterReceiver(tick) } catch (_: Exception) {}
+        try { unregisterReceiver(carChanged) } catch (_: Exception) {}
         handler.removeCallbacks(focusTick)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         refreshEvent()
+        if (requestCode == 3 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) pickCar()
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -215,6 +232,7 @@ class MainActivity : Activity() {
     override fun onBackPressed() {
         when {
             pause.visibility == View.VISIBLE -> hidePause()
+            car.visibility == View.VISIBLE -> Unit
             note.visibility == View.VISIBLE -> hideNote()
             drawerOpen -> closeDrawer()
             else -> Unit // a kezdőképernyőről nincs hova visszalépni
@@ -230,14 +248,28 @@ class MainActivity : Activity() {
             setOnLongClickListener { showSettings(); true }
         }
 
+        seasonText = label("", 15f, fItal, MUTED2).apply {
+            letterSpacing = 0.02f
+            minHeight = dp(28)
+            gravity = Gravity.CENTER_VERTICAL
+            setOnClickListener { showSeason() }
+        }
+        home.addView(seasonText, lp().apply { bottomMargin = dp(10) })
+
         clock = ClockView(this, GOLD).apply {
             setOnClickListener { openClockApp() }
             setOnLongClickListener { showSettings(); true }
         }
         home.addView(clock, LinearLayout.LayoutParams(dp(168), dp(168)).apply { leftMargin = -dp(4) })
 
+        dots = DotsView(this, GOLD).apply {
+            contentDescription = "Fókusz-lánc a héten"
+            setOnClickListener { showChain() }
+        }
+        home.addView(dots, LinearLayout.LayoutParams(dp(104), dp(20)).apply { topMargin = dp(14) })
+
         dateText = label("", 19f, fItal, MUTED).apply { letterSpacing = 0.02f }
-        home.addView(dateText, lp().apply { topMargin = dp(18) })
+        home.addView(dateText, lp().apply { topMargin = dp(10) })
 
         eventText = label("", 17f, fItal, MUTED2).apply {
             isSingleLine = true
@@ -249,12 +281,15 @@ class MainActivity : Activity() {
         }
         home.addView(eventText, lp(MATCH_PARENT).apply { topMargin = dp(2) })
 
+        batteryText = label("", 16f, fItal, Color.parseColor("#B5606B")).apply { visibility = View.GONE }
+        home.addView(batteryText, lp().apply { topMargin = dp(2) })
+
         home.addView(View(this).apply { setBackgroundColor(GOLD) },
-            LinearLayout.LayoutParams(dp(40), dp(1)).apply { topMargin = dp(36); bottomMargin = dp(28) })
+            LinearLayout.LayoutParams(dp(40), dp(1)).apply { topMargin = dp(24); bottomMargin = dp(18) })
 
         slotViews = SLOTS.indices.map { i ->
             label("", 31f, fMed, INK).apply {
-                minHeight = dp(50)
+                minHeight = dp(48)
                 gravity = Gravity.CENTER_VERTICAL
                 setOnClickListener { launchSlot(i) }
                 setOnLongClickListener { pickForSlot(i); true }
@@ -285,7 +320,7 @@ class MainActivity : Activity() {
 
     }
 
-    private fun homeIdle() = !drawerOpen && csend.visibility != View.VISIBLE &&
+    private fun homeIdle() = !drawerOpen && csend.visibility != View.VISIBLE && car.visibility != View.VISIBLE &&
         pause.visibility != View.VISIBLE && note.visibility != View.VISIBLE
 
     // ---------- naptár ----------
@@ -441,7 +476,134 @@ class MainActivity : Activity() {
         refreshEvent()
         refreshFocus()
         refreshSaying()
+        refreshSeason()
+        refreshChain()
+        refreshBattery()
         updateCsend()
+        updateCar()
+    }
+
+    // ---------- mikroévszak ----------
+
+    private fun refreshSeason() {
+        val (cur, _) = Season.now()
+        seasonText.text = "${cur.jp} · ${cur.hu}"
+    }
+
+    private fun showSeason() {
+        val (cur, next) = Season.now()
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("${cur.jp}  ·  ${cur.reading}")
+            .setMessage("${cur.hu}\n\nA japán naptár 24 évszakának egyike, nagyjából két hétig tart.\n\n" +
+                "Következik (${next.month}. ${next.day}.): ${next.jp} · ${next.hu}")
+            .setPositiveButton("Rendben", null)
+            .show()
+    }
+
+    // ---------- fókusz-lánc ----------
+
+    private fun refreshChain() {
+        val (week, todayIdx) = Chain.week(this)
+        dots.done = week
+        dots.todayIndex = todayIdx
+    }
+
+    private fun showChain() {
+        val (week, _) = Chain.week(this)
+        val n = week.count { it }
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Fókusz-lánc")
+            .setMessage(
+                "A héten $n napon fejeztél be legalább egy fókuszblokkot.\n\n" +
+                    "Arany pötty: kész nap. Új blokkot a FÓKUSZ · BE feliratra koppintva indíthatsz."
+            )
+            .setPositiveButton("Rendben", null)
+            .show()
+    }
+
+    // ---------- akku ----------
+
+    private fun refreshBattery() {
+        val b = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = b?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = b?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val plugged = (b?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0) != 0
+        val pct = if (level >= 0 && scale > 0) level * 100 / scale else 100
+        if (pct <= 20 && !plugged) {
+            batteryText.text = "akku $pct%"
+            batteryText.visibility = View.VISIBLE
+        } else batteryText.visibility = View.GONE
+    }
+
+    // ---------- autós mód ----------
+
+    private fun buildCar() {
+        car = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#F00E0E0E"))
+            visibility = View.GONE
+            isClickable = true
+        }
+        car.addView(label("AUTÓ", 13f, fSemi, GOLD).apply { letterSpacing = 0.23f }, lp())
+        car.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        car.addView(label("Waze", 64f, fMed, INK).apply {
+            minHeight = dp(110)
+            gravity = Gravity.CENTER_VERTICAL
+            setOnClickListener { launchSlotOrPkg(4, "com.waze") }
+        }, lp(MATCH_PARENT))
+        car.addView(View(this).apply { setBackgroundColor(Color.parseColor("#2E2B27")) },
+            LinearLayout.LayoutParams(MATCH_PARENT, dp(1)).apply { topMargin = dp(8); bottomMargin = dp(8) })
+        car.addView(label("Telefon", 64f, fMed, INK).apply {
+            minHeight = dp(110)
+            gravity = Gravity.CENTER_VERTICAL
+            setOnClickListener { launchSlot(0) }
+        }, lp(MATCH_PARENT))
+        car.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        car.addView(label("Nem vezetek", 18f, fMed, MUTED).apply {
+            minHeight = dp(48)
+            gravity = Gravity.CENTER_VERTICAL
+            setOnClickListener {
+                prefs.edit().putLong("car_snooze_until", System.currentTimeMillis() + 2 * 60 * 60_000L).apply()
+                updateCar()
+            }
+        }, lp())
+    }
+
+    private fun launchSlotOrPkg(slot: Int, pkg: String) {
+        val entry = apps.firstOrNull { it.pkg == pkg }
+        if (entry != null) launch(entry, bypassPause = true) else launchSlot(slot)
+    }
+
+    private fun updateCar() {
+        val on = Car.isOn(this)
+        if (on && car.visibility != View.VISIBLE) {
+            closeDrawer(); hidePause(); hideNote(); hideKeyboard()
+        }
+        car.visibility = if (on) View.VISIBLE else View.GONE
+    }
+
+    private fun pickCar() {
+        if (checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 3)
+            return
+        }
+        val bonded = try {
+            getSystemService(BluetoothManager::class.java)?.adapter?.bondedDevices?.toList().orEmpty()
+        } catch (_: SecurityException) { emptyList() }
+        val names = bonded.map { d -> try { d.name ?: d.address } catch (_: SecurityException) { d.address } }
+        val items = (names + "Autós mód kikapcsolása").toTypedArray()
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle(if (bonded.isEmpty()) "Nincs párosított eszköz" else "Melyik az autód?")
+            .setItems(items) { _, which ->
+                if (which < bonded.size) {
+                    prefs.edit().putString("car_addr", bonded[which].address)
+                        .putString("car_name", names[which]).putBoolean("car_connected", false).apply()
+                } else {
+                    prefs.edit().remove("car_addr").remove("car_name").putBoolean("car_connected", false).apply()
+                }
+                updateCar()
+            }
+            .show()
     }
 
     private fun refreshSlots() {
@@ -776,6 +938,7 @@ class MainActivity : Activity() {
             "Csend vége: ${hm(end)}",
             "Naptár: ${if (prefs.getBoolean("cal_discreet", false)) "diszkrét (csak idő és hely)" else "teljes"}",
             "Naptár hozzáférés",
+            "Autós mód: ${prefs.getString("car_name", null) ?: "nincs beállítva"}",
             "Háttérkép beállítása",
             "Kezdőképernyő-app választása",
         )
@@ -793,8 +956,9 @@ class MainActivity : Activity() {
                     4 -> if (checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED)
                         safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
                     else requestPermissions(arrayOf(Manifest.permission.READ_CALENDAR), 1)
-                    5 -> safeStart(Intent.createChooser(Intent(Intent.ACTION_SET_WALLPAPER), "Háttérkép"))
-                    6 -> safeStart(Intent(Settings.ACTION_HOME_SETTINGS))
+                    5 -> pickCar()
+                    6 -> safeStart(Intent.createChooser(Intent(Intent.ACTION_SET_WALLPAPER), "Háttérkép"))
+                    7 -> safeStart(Intent(Settings.ACTION_HOME_SETTINGS))
                 }
             }
             .show()
