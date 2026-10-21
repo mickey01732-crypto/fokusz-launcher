@@ -151,12 +151,20 @@ class CarReceiver : BroadcastReceiver() {
 object Weather {
     private const val URL_STR =
         "https://api.open-meteo.com/v1/forecast?latitude=46.68&longitude=21.09" +
-            "&current=temperature_2m,weather_code&timezone=Europe%2FBudapest"
+            "&current=temperature_2m,weather_code" +
+            "&daily=temperature_2m_max,temperature_2m_min,weather_code&forecast_days=2" +
+            "&timezone=Europe%2FBudapest"
 
     fun cached(ctx: Context): String? {
         val p = ctx.getSharedPreferences("fokusz", Context.MODE_PRIVATE)
         val age = System.currentTimeMillis() - p.getLong("wx_time", 0)
         return if (age < 3 * 60 * 60_000L) p.getString("wx_text", null) else null
+    }
+
+    fun tomorrow(ctx: Context): String? {
+        val p = ctx.getSharedPreferences("fokusz", Context.MODE_PRIVATE)
+        val age = System.currentTimeMillis() - p.getLong("wx_time", 0)
+        return if (age < 12 * 60 * 60_000L) p.getString("wx_tomorrow", null) else null
     }
 
     fun refreshIfStale(ctx: Context, done: (String?) -> Unit) {
@@ -169,10 +177,21 @@ object Weather {
                 c.readTimeout = 8000
                 val body = c.inputStream.bufferedReader().use { it.readText() }
                 c.disconnect()
-                val cur = JSONObject(body).getJSONObject("current")
+                val json = JSONObject(body)
+                val cur = json.getJSONObject("current")
                 val t = cur.getDouble("temperature_2m").roundToInt()
                 val text = "$t° ${describe(cur.getInt("weather_code"))}"
-                p.edit().putString("wx_text", text).putLong("wx_time", System.currentTimeMillis()).apply()
+                var tomorrow: String? = null
+                json.optJSONObject("daily")?.let { d ->
+                    val mx = d.getJSONArray("temperature_2m_max")
+                    val mn = d.getJSONArray("temperature_2m_min")
+                    val wc = d.getJSONArray("weather_code")
+                    if (mx.length() > 1) {
+                        tomorrow = "${mn.getDouble(1).roundToInt()}–${mx.getDouble(1).roundToInt()}° · ${describe(wc.getInt(1))}"
+                    }
+                }
+                p.edit().putString("wx_text", text).putString("wx_tomorrow", tomorrow)
+                    .putLong("wx_time", System.currentTimeMillis()).apply()
                 done(text)
             } catch (_: Exception) {
                 done(null)
@@ -206,9 +225,14 @@ data class NextEvent(val id: Long, val begin: Long, val end: Long, val title: St
 object Agenda {
     fun next(ctx: Context): NextEvent? {
         val now = System.currentTimeMillis()
+        return between(ctx, now, now + 24 * 60 * 60_000L)
+    }
+
+    /** Az első (nem egész napos) esemény, ami [from] után ér véget és [to] előtt kezdődik. */
+    fun between(ctx: Context, from: Long, to: Long): NextEvent? {
         val b = CalendarContract.Instances.CONTENT_URI.buildUpon()
-        ContentUris.appendId(b, now - 12 * 60 * 60_000L)
-        ContentUris.appendId(b, now + 24 * 60 * 60_000L)
+        ContentUris.appendId(b, from - 12 * 60 * 60_000L)
+        ContentUris.appendId(b, to)
         val proj = arrayOf(
             CalendarContract.Instances.EVENT_ID,
             CalendarContract.Instances.BEGIN,
@@ -221,7 +245,7 @@ object Agenda {
             "${CalendarContract.Instances.END} > ? AND " +
             "${CalendarContract.Instances.BEGIN} < ? AND " +
             "${CalendarContract.Instances.SELF_ATTENDEE_STATUS} != ${CalendarContract.Attendees.ATTENDEE_STATUS_DECLINED}"
-        val args = arrayOf(now.toString(), (now + 24 * 60 * 60_000L).toString())
+        val args = arrayOf(from.toString(), to.toString())
         return try {
             ctx.contentResolver.query(
                 b.build(), proj, sel, args, "${CalendarContract.Instances.BEGIN} ASC",
@@ -236,6 +260,22 @@ object Agenda {
         } catch (_: Exception) {
             null
         }
+    }
+
+    fun dayBounds(offsetDays: Int): Pair<Long, Long> {
+        val c = Calendar.getInstance()
+        c.add(Calendar.DAY_OF_YEAR, offsetDays)
+        c.set(Calendar.HOUR_OF_DAY, 0); c.set(Calendar.MINUTE, 0); c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0)
+        val start = c.timeInMillis
+        c.add(Calendar.DAY_OF_YEAR, 1)
+        return start to c.timeInMillis
+    }
+
+    fun short(e: NextEvent, discreet: Boolean): String {
+        val hm = SimpleDateFormat("H:mm", Locale("hu")).format(Date(e.begin))
+        val place = e.location?.substringBefore(',')?.trim()
+        return if (discreet) "$hm · ${place ?: "esemény"}"
+        else "$hm · ${e.title}" + (place?.let { ", $it" } ?: "")
     }
 
     fun format(e: NextEvent, discreet: Boolean): String {

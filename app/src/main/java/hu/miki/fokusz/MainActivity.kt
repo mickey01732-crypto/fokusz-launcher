@@ -23,7 +23,10 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.animation.ValueAnimator
 import android.provider.CalendarContract
+import android.provider.ContactsContract
+import android.view.animation.AccelerateDecelerateInterpolator
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextUtils
@@ -114,6 +117,15 @@ class MainActivity : Activity() {
     private lateinit var dots: DotsView
     private lateinit var batteryText: TextView
     private lateinit var car: LinearLayout
+    private lateinit var greet: LinearLayout
+    private lateinit var greetBox: LinearLayout
+    private lateinit var breath: LinearLayout
+    private lateinit var breathView: BreathView
+    private lateinit var breathText: TextView
+    private lateinit var breathCount: TextView
+    private var breathAnim: ValueAnimator? = null
+    private var breathLeft = 0
+    private var breathThenFocus = 0
 
     private var apps: List<AppEntry> = emptyList()
     private var drawerOpen = false
@@ -155,6 +167,8 @@ class MainActivity : Activity() {
         buildPause()
         buildNote()
         buildCar()
+        buildGreet()
+        buildBreath()
         val full = FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
         root.addView(home, full)
         root.addView(drawer, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
@@ -162,6 +176,8 @@ class MainActivity : Activity() {
         root.addView(note, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(car, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(pause, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        root.addView(breath, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        root.addView(greet, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
 
         root.canSwipeUp = { homeIdle() }
         root.canSwipeDown = { !drawerOpen && pause.visibility != View.VISIBLE && note.visibility != View.VISIBLE }
@@ -179,6 +195,8 @@ class MainActivity : Activity() {
             csend.setPadding(dp(36), bars.top + dp(96), dp(36), bars.bottom + dp(48))
             pause.setPadding(dp(36), bars.top + dp(48), dp(36), bars.bottom + dp(48))
             note.setPadding(dp(36), bars.top + dp(56), dp(36), maxOf(bars.bottom, ime.bottom) + dp(24))
+            greet.setPadding(dp(36), bars.top + dp(56), dp(36), bars.bottom + dp(40))
+            breath.setPadding(dp(36), bars.top + dp(56), dp(36), bars.bottom + dp(40))
             insets
         }
         setContentView(root)
@@ -205,6 +223,7 @@ class MainActivity : Activity() {
         askCalendarOnce()
         handler.removeCallbacks(focusTick)
         handler.post(focusTick)
+        maybeGreet()
     }
 
     override fun onPause() {
@@ -218,6 +237,7 @@ class MainActivity : Activity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         refreshEvent()
         if (requestCode == 3 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) pickCar()
+        if (requestCode == 4 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) showFavorites()
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -225,12 +245,15 @@ class MainActivity : Activity() {
         // Home gomb: vissza a tiszta kezdőképernyőre
         hidePause()
         hideNote()
+        hideGreet()
         closeDrawer()
     }
 
     @Deprecated("Deprecated in Java")
     override fun onBackPressed() {
         when {
+            greet.visibility == View.VISIBLE -> hideGreet()
+            breath.visibility == View.VISIBLE -> stopBreath(startFocus = false)
             pause.visibility == View.VISIBLE -> hidePause()
             car.visibility == View.VISIBLE -> Unit
             note.visibility == View.VISIBLE -> hideNote()
@@ -292,7 +315,7 @@ class MainActivity : Activity() {
                 minHeight = dp(48)
                 gravity = Gravity.CENTER_VERTICAL
                 setOnClickListener { launchSlot(i) }
-                setOnLongClickListener { pickForSlot(i); true }
+                setOnLongClickListener { if (i == 0) showFavorites() else pickForSlot(i); true }
             }
         }
         slotViews.forEach { home.addView(it, lp()) }
@@ -321,6 +344,7 @@ class MainActivity : Activity() {
     }
 
     private fun homeIdle() = !drawerOpen && csend.visibility != View.VISIBLE && car.visibility != View.VISIBLE &&
+        greet.visibility != View.VISIBLE && breath.visibility != View.VISIBLE &&
         pause.visibility != View.VISIBLE && note.visibility != View.VISIBLE
 
     // ---------- naptár ----------
@@ -393,16 +417,243 @@ class MainActivity : Activity() {
                 }
         } else {
             dlg.setTitle("Mélymunka-blokk")
-                .setItems(arrayOf("25 perc", "50 perc")) { _, which ->
-                    if (Build.VERSION.SDK_INT >= 33 &&
-                        checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-                    ) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
-                    Focus.start(this, if (which == 0) 25 else 50)
-                    handler.removeCallbacks(focusTick)
-                    handler.post(focusTick)
+                .setItems(arrayOf("25 perc", "50 perc", "1 perc légzés, utána 25 perc", "Csak 1 perc légzés")) { _, which ->
+                    when (which) {
+                        0 -> startFocus(25)
+                        1 -> startFocus(50)
+                        2 -> startBreath(thenFocus = 25)
+                        3 -> startBreath(thenFocus = 0)
+                    }
                 }
         }
         dlg.show()
+    }
+
+    private fun startFocus(minutes: Int) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
+        Focus.start(this, minutes)
+        handler.removeCallbacks(focusTick)
+        handler.post(focusTick)
+    }
+
+    // ---------- egy perc légzés ----------
+
+    private fun buildBreath() {
+        breath = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setBackgroundColor(NIGHT)
+            visibility = View.GONE
+            isClickable = true
+        }
+        breath.addView(label("LÉGZÉS", 13f, fSemi, GOLD).apply { letterSpacing = 0.23f }, lp())
+        breath.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        breathView = BreathView(this, GOLD)
+        breath.addView(breathView, LinearLayout.LayoutParams(dp(260), dp(260)))
+        breathText = label("", 30f, fItal, NIGHT_INK)
+        breath.addView(breathText, lp().apply { topMargin = dp(36) })
+        breathCount = label("", 18f, fMed, NIGHT_MUTED)
+        breath.addView(breathCount, lp().apply { topMargin = dp(10) })
+        breath.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        breath.addView(label("Kihagyom", 18f, fMed, NIGHT_MUTED).apply {
+            minHeight = dp(48)
+            gravity = Gravity.CENTER
+            setPadding(dp(24), 0, dp(24), 0)
+            setOnClickListener { stopBreath(startFocus = true) }
+        }, lp())
+    }
+
+    private val breathTick = object : Runnable {
+        override fun run() {
+            breathLeft -= 1
+            breathCount.text = "$breathLeft mp"
+            if (breathLeft <= 0) stopBreath(startFocus = true) else handler.postDelayed(this, 1000)
+        }
+    }
+
+    private fun startBreath(thenFocus: Int) {
+        breathThenFocus = thenFocus
+        breathLeft = 60
+        breathCount.text = "60 mp"
+        breathText.text = "Belégzés…"
+        breath.visibility = View.VISIBLE
+        breathAnim?.cancel()
+        breathAnim = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 4000
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = AccelerateDecelerateInterpolator()
+            var inhale = true
+            addUpdateListener { breathView.phase = it.animatedValue as Float }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationRepeat(animation: android.animation.Animator) {
+                    inhale = !inhale
+                    breathText.text = if (inhale) "Belégzés…" else "Kilégzés…"
+                }
+            })
+            start()
+        }
+        handler.removeCallbacks(breathTick)
+        handler.postDelayed(breathTick, 1000)
+    }
+
+    private fun stopBreath(startFocus: Boolean) {
+        if (breath.visibility != View.VISIBLE) return
+        handler.removeCallbacks(breathTick)
+        breathAnim?.cancel()
+        breathAnim = null
+        breath.visibility = View.GONE
+        if (startFocus && breathThenFocus > 0) startFocus(breathThenFocus)
+        breathThenFocus = 0
+    }
+
+    // ---------- reggeli és esti kép ----------
+
+    private fun buildGreet() {
+        greet = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#F50E0E0E"))
+            visibility = View.GONE
+            isClickable = true
+            setOnClickListener { hideGreet() }
+        }
+        greet.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        greetBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        greet.addView(greetBox, lp(MATCH_PARENT))
+        greet.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1.4f))
+        greet.addView(label("Koppints a folytatáshoz", 15f, fItal, MUTED2), lp())
+    }
+
+    private fun greetLine(text: String, size: Float, tf: Typeface, color: Int, top: Int) {
+        greetBox.addView(label(text, size, tf, color).apply { setLineSpacing(0f, 1.15f) }, lp(MATCH_PARENT).apply { topMargin = dp(top) })
+    }
+
+    private fun maybeGreet() {
+        if (greet.visibility == View.VISIBLE) return
+        if (csend.visibility == View.VISIBLE || car.visibility == View.VISIBLE) return
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
+        when {
+            hour in 5..10 && prefs.getString("greet_morning", null) != today -> {
+                prefs.edit().putString("greet_morning", today).apply()
+                showGreet(evening = false)
+            }
+            hour in 20..23 && prefs.getString("greet_evening", null) != today -> {
+                prefs.edit().putString("greet_evening", today).apply()
+                showGreet(evening = true)
+            }
+        }
+    }
+
+    private fun showGreet(evening: Boolean) {
+        greetBox.removeAllViews()
+        val discreet = prefs.getBoolean("cal_discreet", false)
+        val calOk = checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
+        val (season, _) = Season.now()
+        val saying = Sayings.today()
+        greetLine("${season.jp} · ${season.hu}", 15f, fItal, MUTED2, 0)
+        if (!evening) {
+            greetLine("Jó reggelt, Miki.", 40f, fItal, INK, 14)
+            Weather.cached(this)?.let { greetLine("Most $it", 20f, fMed, MUTED, 12) }
+            greetBox.addView(View(this).apply { setBackgroundColor(GOLD) },
+                LinearLayout.LayoutParams(dp(40), dp(1)).apply { topMargin = dp(28); bottomMargin = dp(24) })
+            val (_, end) = Agenda.dayBounds(0)
+            val first = if (calOk) Agenda.between(this, System.currentTimeMillis(), end) else null
+            greetLine(first?.let { "Első: ${Agenda.short(it, discreet)}" } ?: "Ma nincs naptárbejegyzés.", 21f, fMed, INK, 0)
+        } else {
+            greetLine("Jó estét, Miki.", 40f, fItal, INK, 14)
+            val (week, todayIdx) = Chain.week(this)
+            greetLine(
+                if (week[todayIdx]) "A mai pötty arany. Szép munka." else "A mai pötty üres maradt. Holnap újra.",
+                20f, fMed, MUTED, 12,
+            )
+            greetBox.addView(View(this).apply { setBackgroundColor(GOLD) },
+                LinearLayout.LayoutParams(dp(40), dp(1)).apply { topMargin = dp(28); bottomMargin = dp(24) })
+            val (start, end) = Agenda.dayBounds(1)
+            val first = if (calOk) Agenda.between(this, start, end) else null
+            greetLine(first?.let { "Holnap első: ${Agenda.short(it, discreet)}" } ?: "Holnapra nincs naptárbejegyzés.", 21f, fMed, INK, 0)
+            Weather.tomorrow(this)?.let { greetLine("Holnap: $it", 20f, fMed, MUTED, 10) }
+        }
+        greetLine(saying.jp, 18f, Typeface.create(Typeface.SERIF, Typeface.NORMAL), GOLD, 36)
+        greetLine(saying.hu, 18f, fItal, MUTED, 4)
+
+        greet.alpha = 0f
+        greet.visibility = View.VISIBLE
+        greet.animate().alpha(1f).setDuration(300).start()
+        handler.removeCallbacks(autoHideGreet)
+        handler.postDelayed(autoHideGreet, 10_000)
+    }
+
+    private val autoHideGreet = Runnable { hideGreet() }
+
+    private fun hideGreet() {
+        handler.removeCallbacks(autoHideGreet)
+        if (greet.visibility != View.VISIBLE) return
+        greet.animate().alpha(0f).setDuration(400).withEndAction { greet.visibility = View.GONE }.start()
+    }
+
+    // ---------- kedvenc hívások ----------
+
+    private fun showFavorites() {
+        if (checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE), 4)
+            return
+        }
+        data class Fav(val id: Long, val name: String, val number: String, val primary: Boolean)
+        val favs = mutableListOf<Fav>()
+        try {
+            contentResolver.query(
+                ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+                arrayOf(
+                    ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
+                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME,
+                    ContactsContract.CommonDataKinds.Phone.NUMBER,
+                    ContactsContract.CommonDataKinds.Phone.IS_SUPER_PRIMARY,
+                ),
+                "${ContactsContract.CommonDataKinds.Phone.STARRED} = 1",
+                null,
+                "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} ASC",
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    favs.add(Fav(c.getLong(0), c.getString(1) ?: "", c.getString(2) ?: "", c.getInt(3) == 1))
+                }
+            }
+        } catch (_: Exception) {}
+        val unique = favs.filter { it.number.isNotBlank() }
+            .groupBy { it.id }
+            .map { (_, list) -> list.firstOrNull { it.primary } ?: list.first() }
+            .take(8)
+
+        if (unique.isEmpty()) {
+            AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                .setTitle("Nincs kedvenc névjegy")
+                .setMessage("A Névjegyek appban jelöld csillaggal azokat, akiket gyakran hívsz, és itt megjelennek.")
+                .setPositiveButton("Telefon") { _, _ -> launchSlot(0) }
+                .setNeutralButton("Más app ide…") { _, _ -> pickForSlot(0) }
+                .setNegativeButton("Rendben", null)
+                .show()
+            return
+        }
+        val names = unique.map { it.name }
+        val items = (names + "Telefon megnyitása" + "Más app erre a helyre…").toTypedArray()
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Kedvencek")
+            .setItems(items) { _, which ->
+                when {
+                    which < unique.size -> call(unique[which].number)
+                    which == unique.size -> launchSlot(0)
+                    else -> pickForSlot(0)
+                }
+            }
+            .show()
+    }
+
+    private fun call(number: String) {
+        val uri = Uri.parse("tel:" + Uri.encode(number))
+        val canCall = checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
+        safeStart(Intent(if (canCall) Intent.ACTION_CALL else Intent.ACTION_DIAL, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 
     // ---------- gyorsjegyzet ----------

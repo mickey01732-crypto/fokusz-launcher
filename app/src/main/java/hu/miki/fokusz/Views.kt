@@ -114,6 +114,34 @@ class DotsView(ctx: Context, private val accent: Int) : View(ctx) {
     }
 }
 
+/** Lassan táguló-szűkülő arany kör a légzéshez. */
+class BreathView(ctx: Context, accent: Int) : View(ctx) {
+    var phase = 0f
+        set(v) { field = v; invalidate() }
+    private val d = resources.displayMetrics.density
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; color = accent; strokeWidth = 2f * d
+    }
+    private val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL; color = accent; alpha = 28
+    }
+    private val guide = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; color = Color.parseColor("#3A3631"); strokeWidth = 1f * d
+    }
+
+    override fun onDraw(c: Canvas) {
+        super.onDraw(c)
+        val cx = width / 2f
+        val cy = height / 2f
+        val max = min(width, height) / 2f - 4 * d
+        val minR = max * 0.35f
+        val r = minR + (max - minR) * phase
+        c.drawCircle(cx, cy, max, guide)
+        c.drawCircle(cx, cy, r, glow)
+        c.drawCircle(cx, cy, r, ring)
+    }
+}
+
 /** Gyökér, ami felismeri a húzásokat (fel: összes app, le: értesítések, balra: jegyzet). */
 class SwipeFrame(ctx: Context) : FrameLayout(ctx) {
     var canSwipeUp: () -> Boolean = { false }
