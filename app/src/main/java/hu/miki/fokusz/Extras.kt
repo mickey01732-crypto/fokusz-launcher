@@ -1,6 +1,5 @@
 package hu.miki.fokusz
 
-import android.accessibilityservice.AccessibilityService
 import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
@@ -11,7 +10,6 @@ import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.provider.CalendarContract
-import android.view.accessibility.AccessibilityEvent
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
@@ -89,22 +87,6 @@ class FocusReceiver : BroadcastReceiver() {
             .remove("focus_start").remove("focus_end").apply()
         Focus.notifyDone(ctx)
     }
-}
-
-// ---------- képernyőzár dupla koppintásra ----------
-
-class LockService : AccessibilityService() {
-    companion object {
-        var instance: LockService? = null
-    }
-
-    override fun onServiceConnected() { instance = this }
-    override fun onUnbind(intent: Intent?): Boolean { instance = null; return super.onUnbind(intent) }
-    override fun onDestroy() { instance = null; super.onDestroy() }
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
-    override fun onInterrupt() {}
-
-    fun lock() = performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN)
 }
 
 // ---------- időjárás (Békéscsaba, Open-Meteo) ----------

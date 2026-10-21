@@ -1,5 +1,3 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="lock_desc">A Fókusz kezdőképernyőn dupla koppintással lezárja a telefont. Semmit nem olvas, csak a zárolást végzi.</string>
-    <string name="lock_label">Fókusz – dupla koppintás zárolás</string>
 </resources>

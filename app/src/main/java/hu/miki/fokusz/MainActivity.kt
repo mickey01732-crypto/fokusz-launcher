@@ -27,7 +27,6 @@ import android.text.Editable
 import android.text.TextUtils
 import android.text.TextWatcher
 import android.util.TypedValue
-import android.view.GestureDetector
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -284,10 +283,6 @@ class MainActivity : Activity() {
         saying.addView(sayingHu, lp().apply { topMargin = dp(4) })
         home.addView(saying, lp(MATCH_PARENT).apply { topMargin = dp(2) })
 
-        val taps = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDoubleTap(e: MotionEvent): Boolean { lockScreen(); return true }
-        })
-        home.setOnTouchListener { _, ev -> taps.onTouchEvent(ev); false }
     }
 
     private fun homeIdle() = !drawerOpen && csend.visibility != View.VISIBLE &&
@@ -373,27 +368,6 @@ class MainActivity : Activity() {
                 }
         }
         dlg.show()
-    }
-
-    // ---------- dupla koppintás: zárolás ----------
-
-    private fun lockScreen() {
-        val svc = LockService.instance
-        if (svc != null) { svc.lock(); return }
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle("Zárolás dupla koppintással")
-            .setMessage(
-                "Ehhez egyszer be kell kapcsolni a Fókuszt a Kisegítő lehetőségek között:\n\n" +
-                    "Kisegítő lehetőségek → Telepített alkalmazások → Fókusz → Be.\n\n" +
-                    "Ha a kapcsoló szürke: Alkalmazás infó → jobb felső ⋮ → " +
-                    "„Korlátozott beállítások engedélyezése”, utána újra próbáld."
-            )
-            .setPositiveButton("Kisegítő lehetőségek") { _, _ -> safeStart(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-            .setNeutralButton("Alkalmazás infó") { _, _ ->
-                safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
-            }
-            .setNegativeButton("Később", null)
-            .show()
     }
 
     // ---------- gyorsjegyzet ----------
@@ -802,7 +776,6 @@ class MainActivity : Activity() {
             "Csend vége: ${hm(end)}",
             "Naptár: ${if (prefs.getBoolean("cal_discreet", false)) "diszkrét (csak idő és hely)" else "teljes"}",
             "Naptár hozzáférés",
-            "Zárolás dupla koppintással",
             "Háttérkép beállítása",
             "Kezdőképernyő-app választása",
         )
@@ -820,11 +793,8 @@ class MainActivity : Activity() {
                     4 -> if (checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED)
                         safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
                     else requestPermissions(arrayOf(Manifest.permission.READ_CALENDAR), 1)
-                    5 -> if (LockService.instance != null)
-                        safeStart(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                    else lockScreen()
-                    6 -> safeStart(Intent.createChooser(Intent(Intent.ACTION_SET_WALLPAPER), "Háttérkép"))
-                    7 -> safeStart(Intent(Settings.ACTION_HOME_SETTINGS))
+                    5 -> safeStart(Intent.createChooser(Intent(Intent.ACTION_SET_WALLPAPER), "Háttérkép"))
+                    6 -> safeStart(Intent(Settings.ACTION_HOME_SETTINGS))
                 }
             }
             .show()
