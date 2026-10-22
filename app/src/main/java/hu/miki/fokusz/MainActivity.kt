@@ -126,6 +126,12 @@ class MainActivity : Activity() {
     private var breathAnim: ValueAnimator? = null
     private var breathLeft = 0
     private var breathThenFocus = 0
+    private lateinit var panel: LinearLayout
+    private lateinit var marketBox: LinearLayout
+    private lateinit var marketStamp: TextView
+    private lateinit var bookText: TextView
+    private lateinit var bookSource: TextView
+    private lateinit var bookAll: TextView
 
     private var apps: List<AppEntry> = emptyList()
     private var drawerOpen = false
@@ -169,11 +175,13 @@ class MainActivity : Activity() {
         buildCar()
         buildGreet()
         buildBreath()
+        buildPanel()
         val full = FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
         root.addView(home, full)
         root.addView(drawer, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(csend, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(note, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        root.addView(panel, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(car, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(pause, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(breath, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
@@ -181,10 +189,12 @@ class MainActivity : Activity() {
 
         root.canSwipeUp = { homeIdle() }
         root.canSwipeDown = { !drawerOpen && pause.visibility != View.VISIBLE && note.visibility != View.VISIBLE }
-        root.canSwipeLeft = { homeIdle() }
+        root.canSwipeLeft = { homeIdle() || panel.visibility == View.VISIBLE }
+        root.canSwipeRight = { homeIdle() }
+        root.onSwipeRight = { openPanel() }
         root.onSwipeUp = { openDrawer() }
         root.onSwipeDown = { expandNotifications() }
-        root.onSwipeLeft = { openNote() }
+        root.onSwipeLeft = { if (panel.visibility == View.VISIBLE) hidePanel() else openNote() }
 
         root.setOnApplyWindowInsetsListener { _, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
@@ -195,6 +205,7 @@ class MainActivity : Activity() {
             csend.setPadding(dp(36), bars.top + dp(96), dp(36), bars.bottom + dp(48))
             pause.setPadding(dp(36), bars.top + dp(48), dp(36), bars.bottom + dp(48))
             note.setPadding(dp(36), bars.top + dp(56), dp(36), maxOf(bars.bottom, ime.bottom) + dp(24))
+            panel.setPadding(dp(36), bars.top + dp(56), dp(36), bars.bottom + dp(32))
             greet.setPadding(dp(36), bars.top + dp(56), dp(36), bars.bottom + dp(40))
             breath.setPadding(dp(36), bars.top + dp(56), dp(36), bars.bottom + dp(40))
             insets
@@ -245,6 +256,7 @@ class MainActivity : Activity() {
         // Home gomb: vissza a tiszta kezdőképernyőre
         hidePause()
         hideNote()
+        hidePanel()
         hideGreet()
         closeDrawer()
     }
@@ -257,6 +269,7 @@ class MainActivity : Activity() {
             pause.visibility == View.VISIBLE -> hidePause()
             car.visibility == View.VISIBLE -> Unit
             note.visibility == View.VISIBLE -> hideNote()
+            panel.visibility == View.VISIBLE -> hidePanel()
             drawerOpen -> closeDrawer()
             else -> Unit // a kezdőképernyőről nincs hova visszalépni
         }
@@ -345,7 +358,7 @@ class MainActivity : Activity() {
 
     private fun homeIdle() = !drawerOpen && csend.visibility != View.VISIBLE && car.visibility != View.VISIBLE &&
         greet.visibility != View.VISIBLE && breath.visibility != View.VISIBLE &&
-        pause.visibility != View.VISIBLE && note.visibility != View.VISIBLE
+        pause.visibility != View.VISIBLE && note.visibility != View.VISIBLE && panel.visibility != View.VISIBLE
 
     // ---------- naptár ----------
 
@@ -654,6 +667,203 @@ class MainActivity : Activity() {
         val uri = Uri.parse("tel:" + Uri.encode(number))
         val canCall = checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
         safeStart(Intent(if (canCall) Intent.ACTION_CALL else Intent.ACTION_DIAL, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+
+    // ---------- bal panel: piac + könyves gondolatok ----------
+
+    private fun buildPanel() {
+        panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = ColorDrawable(Color.parseColor("#F2121214"))
+            visibility = View.GONE
+            isClickable = true
+        }
+        panel.addView(label("PIAC", 13f, fSemi, GOLD).apply {
+            letterSpacing = 0.23f
+            minHeight = dp(32)
+            gravity = Gravity.CENTER_VERTICAL
+            setOnLongClickListener { editTickers(); true }
+        }, lp())
+        marketBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        panel.addView(marketBox, lp(MATCH_PARENT).apply { topMargin = dp(8) })
+        marketStamp = label("", 14f, fItal, MUTED2).apply {
+            minHeight = dp(40)
+            gravity = Gravity.CENTER_VERTICAL
+            setOnClickListener {
+                marketStamp.text = "frissítés…"
+                Market.refresh(this@MainActivity, force = true) { runOnUiThread { renderMarket() } }
+            }
+        }
+        panel.addView(marketStamp, lp(MATCH_PARENT).apply { topMargin = dp(4) })
+
+        panel.addView(View(this).apply { setBackgroundColor(Color.parseColor("#2E2B27")) },
+            LinearLayout.LayoutParams(MATCH_PARENT, dp(1)).apply { topMargin = dp(20); bottomMargin = dp(24) })
+
+        panel.addView(label("OLVASMÁNY", 13f, fSemi, GOLD).apply { letterSpacing = 0.23f }, lp())
+        bookText = label("", 23f, fItal, INK).apply { setLineSpacing(0f, 1.2f) }
+        panel.addView(bookText, lp(MATCH_PARENT).apply { topMargin = dp(16) })
+        bookSource = label("", 16f, fMed, MUTED)
+        panel.addView(bookSource, lp(MATCH_PARENT).apply { topMargin = dp(12) })
+
+        panel.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        actions.addView(label("+ Új gondolat", 18f, fMed, INK).apply {
+            minHeight = dp(48)
+            gravity = Gravity.CENTER_VERTICAL
+            setOnClickListener { addBookNote() }
+        }, lp())
+        actions.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        bookAll = label("", 18f, fMed, MUTED).apply {
+            minHeight = dp(48)
+            gravity = Gravity.CENTER_VERTICAL
+            setOnClickListener { listBookNotes() }
+        }
+        actions.addView(bookAll, lp())
+        panel.addView(actions, lp(MATCH_PARENT))
+    }
+
+    private fun openPanel() {
+        renderMarket()
+        renderBook()
+        Market.refresh(this, force = false) { runOnUiThread { renderMarket() } }
+        panel.alpha = 0f
+        panel.translationX = -dp(32).toFloat()
+        panel.visibility = View.VISIBLE
+        panel.animate().alpha(1f).translationX(0f).setDuration(180).start()
+    }
+
+    private fun hidePanel() {
+        if (panel.visibility != View.VISIBLE) return
+        panel.animate().alpha(0f).translationX(-dp(24).toFloat()).setDuration(150)
+            .withEndAction { panel.visibility = View.GONE; panel.translationX = 0f }.start()
+    }
+
+    private fun renderMarket() {
+        marketBox.removeAllViews()
+        val (quotes, time) = Market.cached(this)
+        if (quotes.isEmpty()) {
+            marketBox.addView(label("Még nincs adat. Koppints lent a frissítésre.", 18f, fItal, MUTED), lp(MATCH_PARENT))
+        }
+        for (q in quotes) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = dp(46)
+            }
+            row.addView(label(q.label, 23f, fMed, INK), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+            row.addView(label(Market.fmt(q), 23f, fMed, INK), lp())
+            val ch = Market.fmtChange(q)
+            val up = (q.changePct ?: 0.0) >= 0
+            row.addView(label(ch ?: "", 16f, fItal, if (up) GOLD else Color.parseColor("#B5606B")).apply {
+                gravity = Gravity.END
+            }, LinearLayout.LayoutParams(dp(64), WRAP_CONTENT))
+            marketBox.addView(row, lp(MATCH_PARENT))
+        }
+        marketStamp.text = if (time > 0)
+            "frissítve: " + SimpleDateFormat("MMMM d. H:mm", Locale("hu")).format(Date(time)) + " · koppints a frissítéshez"
+        else "koppints a frissítéshez"
+    }
+
+    private fun editTickers() {
+        val list = Market.tickers(this)
+        val items = (list.map { "${it.label}  (${it.symbol})" } + "+ Új érték").toTypedArray()
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Piac – értékek")
+            .setItems(items) { _, which ->
+                if (which < list.size) {
+                    AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                        .setTitle(list[which].label)
+                        .setPositiveButton("Törlés") { _, _ ->
+                            Market.saveTickers(this, list.filterIndexed { i, _ -> i != which })
+                            renderMarket()
+                        }
+                        .setNegativeButton("Mégse", null)
+                        .show()
+                } else addTicker(list)
+            }
+            .show()
+    }
+
+    private fun addTicker(list: List<Ticker>) {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(8), dp(24), 0) }
+        val name = EditText(this).apply { hint = "Név (pl. OTP)" }
+        val sym = EditText(this).apply { hint = "Yahoo jel (pl. OTP.BD, GC=F)" }
+        box.addView(name); box.addView(sym)
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Új érték")
+            .setView(box)
+            .setPositiveButton("Hozzáadás") { _, _ ->
+                val n = name.text.toString().trim().replace("|", "").replace(";", "")
+                val sy = sym.text.toString().trim().replace("|", "").replace(";", "")
+                if (n.isNotEmpty() && sy.isNotEmpty()) {
+                    Market.saveTickers(this, list + Ticker(n, sy))
+                    marketStamp.text = "frissítés…"
+                    Market.refresh(this, force = true) { runOnUiThread { renderMarket() } }
+                }
+            }
+            .setNegativeButton("Mégse", null)
+            .show()
+    }
+
+    private fun renderBook() {
+        val n = BookNotes.today(this)
+        val count = BookNotes.all(this).size
+        if (n == null) {
+            bookText.text = "Még nincs gondolat. Írd be, ami megfogott egy könyvből."
+            bookText.setTextColor(MUTED)
+            bookSource.text = ""
+        } else {
+            bookText.text = "„${n.text}”"
+            bookText.setTextColor(INK)
+            bookSource.text = if (n.source.isNotBlank()) "— ${n.source}" else ""
+        }
+        bookAll.text = if (count > 0) "Összes ($count)" else ""
+    }
+
+    private fun addBookNote() {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(8), dp(24), 0) }
+        val text = EditText(this).apply { hint = "Gondolat"; minLines = 3; gravity = Gravity.TOP or Gravity.START }
+        val src = EditText(this).apply { hint = "Forrás"; setText(BookNotes.lastSource(this@MainActivity)) }
+        val chips = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        BookNotes.SOURCES.forEach { s ->
+            chips.addView(TextView(this).apply {
+                this.text = s
+                textSize = 15f
+                setPadding(0, dp(8), 0, dp(8))
+                setOnClickListener { src.setText(s) }
+            })
+        }
+        box.addView(text); box.addView(src); box.addView(chips)
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Új gondolat")
+            .setView(box)
+            .setPositiveButton("Mentés") { _, _ ->
+                val t = text.text.toString().trim()
+                if (t.isNotEmpty()) {
+                    BookNotes.add(this, BookNote(t, src.text.toString().trim()))
+                    renderBook()
+                }
+            }
+            .setNegativeButton("Mégse", null)
+            .show()
+    }
+
+    private fun listBookNotes() {
+        val all = BookNotes.all(this)
+        if (all.isEmpty()) return
+        val items = all.map { n -> n.text.take(70) + (if (n.text.length > 70) "…" else "") +
+            (if (n.source.isNotBlank()) " — ${n.source}" else "") }.toTypedArray()
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Gondolatok")
+            .setItems(items) { _, which ->
+                AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setMessage(all[which].text + (if (all[which].source.isNotBlank()) "\n\n— ${all[which].source}" else ""))
+                    .setPositiveButton("Rendben", null)
+                    .setNegativeButton("Törlés") { _, _ -> BookNotes.remove(this, which); renderBook() }
+                    .show()
+            }
+            .setPositiveButton("Bezárás", null)
+            .show()
     }
 
     // ---------- gyorsjegyzet ----------

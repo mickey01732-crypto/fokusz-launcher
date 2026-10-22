@@ -147,9 +147,11 @@ class SwipeFrame(ctx: Context) : FrameLayout(ctx) {
     var canSwipeUp: () -> Boolean = { false }
     var canSwipeDown: () -> Boolean = { false }
     var canSwipeLeft: () -> Boolean = { false }
+    var canSwipeRight: () -> Boolean = { false }
     var onSwipeUp: () -> Unit = {}
     var onSwipeDown: () -> Unit = {}
     var onSwipeLeft: () -> Unit = {}
+    var onSwipeRight: () -> Unit = {}
 
     private var downX = 0f
     private var downY = 0f
@@ -168,6 +170,9 @@ class SwipeFrame(ctx: Context) : FrameLayout(ctx) {
                 }
                 if (dx < -threshold && abs(dx) > abs(dy) * 1.5f && canSwipeLeft()) {
                     fired = true; onSwipeLeft(); return true
+                }
+                if (dx > threshold && abs(dx) > abs(dy) * 1.5f && canSwipeRight()) {
+                    fired = true; onSwipeRight(); return true
                 }
             }
         }
