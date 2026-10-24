@@ -132,6 +132,8 @@ class MainActivity : Activity() {
     private lateinit var bookText: TextView
     private lateinit var bookSource: TextView
     private lateinit var bookAll: TextView
+    private var bookOffset = 0
+    private var bookShown: BookNote? = null
 
     private var apps: List<AppEntry> = emptyList()
     private var drawerOpen = false
@@ -700,7 +702,11 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(MATCH_PARENT, dp(1)).apply { topMargin = dp(20); bottomMargin = dp(24) })
 
         panel.addView(label("OLVASMÁNY", 13f, fSemi, GOLD).apply { letterSpacing = 0.23f }, lp())
-        bookText = label("", 23f, fItal, INK).apply { setLineSpacing(0f, 1.2f) }
+        bookText = label("", 23f, fItal, INK).apply {
+            setLineSpacing(0f, 1.2f)
+            setOnClickListener { bookOffset++; renderBook() }
+            setOnLongClickListener { bookShown?.let { removeBookNote(it) }; true }
+        }
         panel.addView(bookText, lp(MATCH_PARENT).apply { topMargin = dp(16) })
         bookSource = label("", 16f, fMed, MUTED)
         panel.addView(bookSource, lp(MATCH_PARENT).apply { topMargin = dp(12) })
@@ -806,34 +812,45 @@ class MainActivity : Activity() {
     }
 
     private fun renderBook() {
-        val n = BookNotes.today(this)
-        val count = BookNotes.all(this).size
+        val n = BookNotes.pick(this, bookOffset)
+        bookShown = n
         if (n == null) {
-            bookText.text = "Még nincs gondolat. Írd be, ami megfogott egy könyvből."
+            bookText.text = "Minden gondolatot elrejtettél. Írj be újat, vagy hozd vissza őket az Összes alatt."
             bookText.setTextColor(MUTED)
             bookSource.text = ""
         } else {
-            bookText.text = "„${n.text}”"
+            bookText.text = if (n.userIndex >= 0) "„${n.text}”" else n.text
             bookText.setTextColor(INK)
             bookSource.text = if (n.source.isNotBlank()) "— ${n.source}" else ""
         }
-        bookAll.text = if (count > 0) "Összes ($count)" else ""
+        bookAll.text = "Összes"
+    }
+
+    private fun removeBookNote(n: BookNote) {
+        val own = n.userIndex >= 0
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle(if (own) "Törlöd ezt a gondolatot?" else "Elrejted ezt a gondolatot?")
+            .setMessage(if (own) n.text else "Többé nem jelenik meg. Az Összes alatt bármikor visszahozhatod.")
+            .setPositiveButton(if (own) "Törlés" else "Elrejtés") { _, _ -> BookNotes.remove(this, n); renderBook() }
+            .setNegativeButton("Mégse", null)
+            .show()
     }
 
     private fun addBookNote() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(24), dp(8), dp(24), 0) }
         val text = EditText(this).apply { hint = "Gondolat"; minLines = 3; gravity = Gravity.TOP or Gravity.START }
         val src = EditText(this).apply { hint = "Forrás"; setText(BookNotes.lastSource(this@MainActivity)) }
-        val chips = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        BookNotes.SOURCES.forEach { s ->
-            chips.addView(TextView(this).apply {
-                this.text = s
-                textSize = 15f
-                setPadding(0, dp(8), 0, dp(8))
-                setOnClickListener { src.setText(s) }
-            })
+        val choose = TextView(this).apply {
+            this.text = "Könyv választása a listából…"
+            textSize = 16f
+            setPadding(0, dp(14), 0, dp(10))
+            setOnClickListener {
+                AlertDialog.Builder(this@MainActivity, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                    .setItems(BookNotes.SOURCES.toTypedArray()) { _, w -> src.setText(BookNotes.SOURCES[w]) }
+                    .show()
+            }
         }
-        box.addView(text); box.addView(src); box.addView(chips)
+        box.addView(text); box.addView(src); box.addView(choose)
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
             .setTitle("Új gondolat")
             .setView(box)
@@ -841,6 +858,7 @@ class MainActivity : Activity() {
                 val t = text.text.toString().trim()
                 if (t.isNotEmpty()) {
                     BookNotes.add(this, BookNote(t, src.text.toString().trim()))
+                    bookOffset = 0
                     renderBook()
                 }
             }
@@ -849,17 +867,24 @@ class MainActivity : Activity() {
     }
 
     private fun listBookNotes() {
-        val all = BookNotes.all(this)
-        if (all.isEmpty()) return
-        val items = all.map { n -> n.text.take(70) + (if (n.text.length > 70) "…" else "") +
-            (if (n.source.isNotBlank()) " — ${n.source}" else "") }.toTypedArray()
+        val all = BookNotes.pool(this)
+        val hiddenN = BookNotes.hiddenCount(this)
+        val items = all.map { n ->
+            (if (n.userIndex >= 0) "★ " else "") + n.text.take(80) + (if (n.text.length > 80) "…" else "") +
+                (if (n.source.isNotBlank()) "\n— ${n.source.substringBefore(" · ")}" else "")
+        }.toMutableList()
+        if (hiddenN > 0) items.add("↺ Elrejtett gondolatok visszahozása ($hiddenN)")
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle("Gondolatok")
-            .setItems(items) { _, which ->
+            .setTitle("Gondolatok (${all.size})")
+            .setItems(items.toTypedArray()) { _, which ->
+                if (which >= all.size) { BookNotes.restoreHidden(this); renderBook(); return@setItems }
+                val n = all[which]
                 AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-                    .setMessage(all[which].text + (if (all[which].source.isNotBlank()) "\n\n— ${all[which].source}" else ""))
+                    .setMessage(n.text + (if (n.source.isNotBlank()) "\n\n— ${n.source}" else ""))
                     .setPositiveButton("Rendben", null)
-                    .setNegativeButton("Törlés") { _, _ -> BookNotes.remove(this, which); renderBook() }
+                    .setNegativeButton(if (n.userIndex >= 0) "Törlés" else "Elrejtés") { _, _ ->
+                        BookNotes.remove(this, n); renderBook()
+                    }
                     .show()
             }
             .setPositiveButton("Bezárás", null)
