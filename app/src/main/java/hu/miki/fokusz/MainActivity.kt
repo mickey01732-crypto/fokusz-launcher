@@ -18,7 +18,9 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
+import android.media.AudioManager
 import android.net.Uri
+import android.view.KeyEvent
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -133,6 +135,7 @@ class MainActivity : Activity() {
     private lateinit var bookSource: TextView
     private lateinit var bookAll: TextView
     private var bookOffset = 0
+    private lateinit var playBtn: MediaButton
     private var bookShown: BookNote? = null
 
     private var apps: List<AppEntry> = emptyList()
@@ -292,7 +295,24 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setOnClickListener { showSeason() }
         }
-        home.addView(seasonText, lp().apply { bottomMargin = dp(10) })
+        val topRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        topRow.addView(seasonText, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        val media = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        fun mbtn(kind: Int, key: Int, desc: String) = MediaButton(this, kind, MUTED).apply {
+            contentDescription = desc
+            isClickable = true
+            setOnClickListener { mediaKey(key) }
+            setOnLongClickListener { openSpotify(); true }
+        }
+        media.addView(mbtn(0, KeyEvent.KEYCODE_MEDIA_PREVIOUS, "Előző szám"), LinearLayout.LayoutParams(dp(40), dp(44)))
+        playBtn = mbtn(1, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, "Lejátszás vagy szünet")
+        media.addView(playBtn, LinearLayout.LayoutParams(dp(40), dp(44)))
+        media.addView(mbtn(3, KeyEvent.KEYCODE_MEDIA_NEXT, "Következő szám"), LinearLayout.LayoutParams(dp(40), dp(44)))
+        topRow.addView(media, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { rightMargin = -dp(10) })
+        home.addView(topRow, lp(MATCH_PARENT).apply { bottomMargin = dp(6) })
 
         clock = ClockView(this, GOLD).apply {
             setOnClickListener { openClockApp() }
@@ -891,6 +911,25 @@ class MainActivity : Activity() {
             .show()
     }
 
+    // ---------- zene ----------
+
+    private fun mediaKey(code: Int) {
+        val am = getSystemService(AudioManager::class.java)
+        am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
+        am.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+        handler.postDelayed({ refreshMedia() }, 450)
+        handler.postDelayed({ refreshMedia() }, 1500)
+    }
+
+    private fun refreshMedia() {
+        val playing = getSystemService(AudioManager::class.java).isMusicActive
+        playBtn.set(if (playing) 2 else 1)
+    }
+
+    private fun openSpotify() {
+        apps.firstOrNull { it.pkg == "com.spotify.music" }?.let { launch(it, bypassPause = true) }
+    }
+
     // ---------- gyorsjegyzet ----------
 
     private fun buildNote() {
@@ -965,6 +1004,7 @@ class MainActivity : Activity() {
         refreshSeason()
         refreshChain()
         refreshBattery()
+        refreshMedia()
         updateCsend()
         updateCar()
     }

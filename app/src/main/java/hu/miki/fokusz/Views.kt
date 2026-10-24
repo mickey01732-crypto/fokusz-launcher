@@ -142,6 +142,44 @@ class BreathView(ctx: Context, accent: Int) : View(ctx) {
     }
 }
 
+/** Vékony vonalas médiagomb: 0 = előző, 1 = lejátszás, 2 = szünet, 3 = következő. */
+class MediaButton(ctx: Context, var kind: Int, private val tint: Int) : View(ctx) {
+    private val d = resources.displayMetrics.density
+    private val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; color = tint; strokeWidth = 1.6f * d
+        strokeJoin = Paint.Join.ROUND; strokeCap = Paint.Cap.ROUND
+    }
+    private val path = android.graphics.Path()
+
+    fun set(k: Int) { if (k != kind) { kind = k; invalidate() } }
+
+    override fun onDraw(c: Canvas) {
+        super.onDraw(c)
+        val cx = width / 2f
+        val cy = height / 2f
+        val u = 5.5f * d
+        path.reset()
+        when (kind) {
+            1 -> { // ▷
+                path.moveTo(cx - u * 0.7f, cy - u); path.lineTo(cx + u, cy); path.lineTo(cx - u * 0.7f, cy + u); path.close()
+            }
+            2 -> { // ‖
+                path.moveTo(cx - u * 0.45f, cy - u); path.lineTo(cx - u * 0.45f, cy + u)
+                path.moveTo(cx + u * 0.45f, cy - u); path.lineTo(cx + u * 0.45f, cy + u)
+            }
+            0 -> { // |◁
+                path.moveTo(cx - u, cy - u * 0.8f); path.lineTo(cx - u, cy + u * 0.8f)
+                path.moveTo(cx + u * 0.8f, cy - u * 0.8f); path.lineTo(cx - u * 0.4f, cy); path.lineTo(cx + u * 0.8f, cy + u * 0.8f); path.close()
+            }
+            3 -> { // ▷|
+                path.moveTo(cx + u, cy - u * 0.8f); path.lineTo(cx + u, cy + u * 0.8f)
+                path.moveTo(cx - u * 0.8f, cy - u * 0.8f); path.lineTo(cx + u * 0.4f, cy); path.lineTo(cx - u * 0.8f, cy + u * 0.8f); path.close()
+            }
+        }
+        c.drawPath(path, p)
+    }
+}
+
 /** Gyökér, ami felismeri a húzásokat (fel: összes app, le: értesítések, balra: jegyzet). */
 class SwipeFrame(ctx: Context) : FrameLayout(ctx) {
     var canSwipeUp: () -> Boolean = { false }
