@@ -204,7 +204,7 @@ class MainActivity : Activity() {
         root.setOnApplyWindowInsetsListener { _, insets ->
             val bars = insets.getInsets(WindowInsets.Type.systemBars())
             val ime = insets.getInsets(WindowInsets.Type.ime())
-            home.setPadding(dp(36), bars.top + dp(44), dp(36), bars.bottom + dp(32))
+            home.setPadding(dp(36), bars.top + dp(28), dp(36), bars.bottom + dp(32))
             car.setPadding(dp(36), bars.top + dp(56), dp(36), bars.bottom + dp(40))
             drawer.setPadding(dp(36), bars.top + dp(40), dp(36), maxOf(bars.bottom, ime.bottom) + dp(20))
             csend.setPadding(dp(36), bars.top + dp(96), dp(36), bars.bottom + dp(48))
@@ -307,12 +307,12 @@ class MainActivity : Activity() {
             setOnClickListener { mediaKey(key) }
             setOnLongClickListener { openSpotify(); true }
         }
-        media.addView(mbtn(0, KeyEvent.KEYCODE_MEDIA_PREVIOUS, "Előző szám"), LinearLayout.LayoutParams(dp(40), dp(44)))
+        media.addView(mbtn(0, KeyEvent.KEYCODE_MEDIA_PREVIOUS, "Előző szám"), LinearLayout.LayoutParams(dp(40), dp(40)))
         playBtn = mbtn(1, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, "Lejátszás vagy szünet")
-        media.addView(playBtn, LinearLayout.LayoutParams(dp(40), dp(44)))
-        media.addView(mbtn(3, KeyEvent.KEYCODE_MEDIA_NEXT, "Következő szám"), LinearLayout.LayoutParams(dp(40), dp(44)))
+        media.addView(playBtn, LinearLayout.LayoutParams(dp(40), dp(40)))
+        media.addView(mbtn(3, KeyEvent.KEYCODE_MEDIA_NEXT, "Következő szám"), LinearLayout.LayoutParams(dp(40), dp(40)))
         topRow.addView(media, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { rightMargin = -dp(10) })
-        home.addView(topRow, lp(MATCH_PARENT).apply { bottomMargin = dp(6) })
+        home.addView(topRow, lp(MATCH_PARENT).apply { bottomMargin = dp(4) })
 
         clock = ClockView(this, GOLD).apply {
             setOnClickListener { openClockApp() }
