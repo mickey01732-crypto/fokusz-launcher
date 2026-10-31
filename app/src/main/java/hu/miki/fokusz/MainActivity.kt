@@ -47,6 +47,10 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
+import android.content.ClipData
+import android.content.ClipboardManager
+import org.json.JSONArray
 import java.text.Collator
 import java.text.SimpleDateFormat
 import java.util.Calendar
@@ -114,6 +118,7 @@ class MainActivity : Activity() {
     private lateinit var sayingHu: TextView
     private lateinit var note: LinearLayout
     private lateinit var noteInput: EditText
+    private lateinit var noteList: LinearLayout
     private var nextEvent: NextEvent? = null
     private lateinit var seasonText: TextView
     private lateinit var dots: DotsView
@@ -618,7 +623,7 @@ class MainActivity : Activity() {
         greet.visibility = View.VISIBLE
         greet.animate().alpha(1f).setDuration(300).start()
         handler.removeCallbacks(autoHideGreet)
-        handler.postDelayed(autoHideGreet, 10_000)
+        handler.postDelayed(autoHideGreet, 25_000)
     }
 
     private val autoHideGreet = Runnable { hideGreet() }
@@ -939,28 +944,78 @@ class MainActivity : Activity() {
             visibility = View.GONE
             isClickable = true
         }
-        note.addView(label("JEGYZET", 13f, fSemi, GOLD).apply { letterSpacing = 0.23f }, lp())
+        val head = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        head.addView(label("JEGYZET", 13f, fSemi, GOLD).apply { letterSpacing = 0.23f }, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        head.addView(label("Mégse", 18f, fMed, MUTED).apply {
+            minHeight = dp(44)
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(16), 0, 0, 0)
+            setOnClickListener { hideNote() }
+        }, lp())
+        note.addView(head, lp(MATCH_PARENT))
         noteInput = EditText(this).apply {
             background = null
-            setPadding(0, dp(12), 0, dp(12))
+            setPadding(0, dp(8), 0, dp(10))
             textSize = 24f
             typeface = fItal
             setTextColor(INK)
             setHintTextColor(Color.parseColor("#6E685E"))
             hint = "Mit ne felejts el?"
             gravity = Gravity.TOP or Gravity.START
-            minLines = 3
+            minLines = 2
+            maxLines = 5
+            isVerticalScrollBarEnabled = true
         }
         note.addView(noteInput, lp(MATCH_PARENT))
         note.addView(View(this).apply { setBackgroundColor(LINE) },
-            LinearLayout.LayoutParams(MATCH_PARENT, dp(1)).apply { bottomMargin = dp(24) })
-        note.addView(View(this), LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+            LinearLayout.LayoutParams(MATCH_PARENT, dp(1)).apply { bottomMargin = dp(16) })
+        // a mentés közvetlenül a szöveg alatt van, hogy a billentyűzet ne takarja
         note.addView(outlineButton("Mentés a Keepbe").apply { setOnClickListener { saveNote() } }, lp())
-        note.addView(label("Mégse", 18f, fMed, MUTED).apply {
-            minHeight = dp(48)
-            gravity = Gravity.CENTER_VERTICAL
-            setOnClickListener { hideNote() }
-        }, lp().apply { topMargin = dp(8) })
+
+        note.addView(label("LEGUTÓBBI", 13f, fSemi, MUTED2).apply { letterSpacing = 0.23f },
+            lp().apply { topMargin = dp(28); bottomMargin = dp(6) })
+        noteList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        note.addView(ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            addView(noteList, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT))
+        }, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+    }
+
+    private fun localNotes(): MutableList<String> {
+        val arr = try { JSONArray(prefs.getString("quick_notes", null) ?: "[]") } catch (_: Exception) { JSONArray() }
+        return (0 until arr.length()).map { arr.getString(it) }.toMutableList()
+    }
+
+    private fun storeNotes(list: List<String>) {
+        val arr = JSONArray()
+        list.take(30).forEach { arr.put(it) }
+        prefs.edit().putString("quick_notes", arr.toString()).apply()
+    }
+
+    private fun renderNotes() {
+        noteList.removeAllViews()
+        val list = localNotes()
+        if (list.isEmpty()) {
+            noteList.addView(label("Még nincs mentett jegyzet.", 17f, fItal, MUTED2), lp())
+            return
+        }
+        list.forEachIndexed { i, t ->
+            noteList.addView(label(t, 18f, fMed, MUTED).apply {
+                maxLines = 3
+                ellipsize = TextUtils.TruncateAt.END
+                setPadding(0, dp(10), 0, dp(10))
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+                        .setMessage(t)
+                        .setPositiveButton("Küldés a Keepbe") { _, _ -> sendToKeep(t) }
+                        .setNeutralButton("Törlés") { _, _ ->
+                            val l = localNotes(); if (i in l.indices) l.removeAt(i); storeNotes(l); renderNotes()
+                        }
+                        .setNegativeButton("Bezárás", null)
+                        .show()
+                }
+            }, lp(MATCH_PARENT))
+        }
     }
 
     private fun openNote() {
@@ -968,6 +1023,7 @@ class MainActivity : Activity() {
         note.translationX = dp(32).toFloat()
         note.visibility = View.VISIBLE
         note.animate().alpha(1f).translationX(0f).setDuration(180).start()
+        renderNotes()
         noteInput.requestFocus()
         handler.postDelayed({
             (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
@@ -985,13 +1041,29 @@ class MainActivity : Activity() {
     private fun saveNote() {
         val text = noteInput.text.toString().trim()
         if (text.isEmpty()) { hideNote(); return }
-        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
-        val keep = "com.google.android.keep"
-        val hasKeep = try { packageManager.getPackageInfo(keep, 0); true } catch (_: Exception) { false }
-        if (hasKeep) send.setPackage(keep)
-        safeStart(if (hasKeep) send else Intent.createChooser(send, "Jegyzet mentése"))
+        // 1) helyben is megmarad, így semmi nem vész el
+        storeNotes(listOf(text) + localNotes())
+        // 2) vágólapra is
+        try {
+            getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Jegyzet", text))
+        } catch (_: Exception) {}
         noteInput.setText("")
         hideNote()
+        // 3) átadás a Keepnek
+        sendToKeep(text)
+    }
+
+    private fun sendToKeep(text: String) {
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain")
+            .putExtra(Intent.EXTRA_TEXT, text)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val keepIntent = Intent(send).setPackage("com.google.android.keep")
+        val ok = try { startActivity(keepIntent); true } catch (_: Exception) { false }
+        if (!ok) {
+            try { startActivity(Intent.createChooser(send, "Jegyzet mentése").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            catch (_: Exception) {}
+        }
+        Toast.makeText(this, "Elmentve a Fókuszba is (balra húzva megtalálod)", Toast.LENGTH_SHORT).show()
     }
 
     private fun refreshTime() {
