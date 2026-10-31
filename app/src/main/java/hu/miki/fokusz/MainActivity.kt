@@ -341,6 +341,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             visibility = View.GONE
             setOnClickListener { openEvent() }
+            setOnLongClickListener { openCalendarApp(); true }
         }
         home.addView(eventText, lp(MATCH_PARENT).apply { topMargin = dp(2) })
 
@@ -406,6 +407,12 @@ class MainActivity : Activity() {
             eventText.text = Agenda.format(e, prefs.getBoolean("cal_discreet", false))
             eventText.visibility = View.VISIBLE
         }
+    }
+
+    private fun openCalendarApp() {
+        val entry = apps.firstOrNull { it.pkg == "com.google.android.calendar" }
+            ?: apps.firstOrNull { it.pkg == "com.samsung.android.calendar" }
+        if (entry != null) launch(entry, bypassPause = true) else launchSlot(2)
     }
 
     private fun openEvent() {
