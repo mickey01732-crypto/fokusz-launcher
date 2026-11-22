@@ -235,3 +235,48 @@ object BookNotes {
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("fokusz", Context.MODE_PRIVATE)
 }
+
+// ---------- jegyzetből időpont felismerése ----------
+
+object NoteTime {
+    private val DAYS = listOf(
+        "hétfő" to Calendar.MONDAY, "kedd" to Calendar.TUESDAY, "szerd" to Calendar.WEDNESDAY,
+        "csütörtök" to Calendar.THURSDAY, "péntek" to Calendar.FRIDAY,
+        "szombat" to Calendar.SATURDAY, "vasárnap" to Calendar.SUNDAY,
+    )
+    private val TIME = Regex("""\b([01]?\d|2[0-3])[:.]([0-5]\d)\b""")
+    private val HOUR_ONLY = Regex("""\b([01]?\d|2[0-3])\s?(?:óra|órakor|-kor|-kor|kor)\b""")
+
+    /** Ha a szövegben nap és/vagy időpont van, visszaadja a kezdést (ms), különben null. */
+    fun parse(text: String, now: Calendar = Calendar.getInstance()): Long? {
+        val t = text.lowercase()
+        var hour = -1
+        var minute = 0
+        TIME.find(t)?.let { hour = it.groupValues[1].toInt(); minute = it.groupValues[2].toInt() }
+        if (hour < 0) HOUR_ONLY.find(t)?.let { hour = it.groupValues[1].toInt() }
+
+        var dayOffset: Int? = null
+        when {
+            "holnapután" in t -> dayOffset = 2
+            "holnap" in t -> dayOffset = 1
+            Regex("""\bma\b""").containsMatchIn(t) -> dayOffset = 0
+        }
+        if (dayOffset == null) {
+            DAYS.firstOrNull { (w, _) -> w in t }?.let { (_, dow) ->
+                val today = now.get(Calendar.DAY_OF_WEEK)
+                var diff = (dow - today + 7) % 7
+                if (diff == 0) diff = 7
+                dayOffset = diff
+            }
+        }
+        if (dayOffset == null && hour < 0) return null
+
+        val c = now.clone() as Calendar
+        c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0)
+        if (hour < 0) { hour = 9; minute = 0 }
+        c.set(Calendar.HOUR_OF_DAY, hour); c.set(Calendar.MINUTE, minute)
+        if (dayOffset != null) c.add(Calendar.DAY_OF_YEAR, dayOffset!!)
+        else if (c.timeInMillis <= now.timeInMillis) c.add(Calendar.DAY_OF_YEAR, 1)
+        return c.timeInMillis
+    }
+}

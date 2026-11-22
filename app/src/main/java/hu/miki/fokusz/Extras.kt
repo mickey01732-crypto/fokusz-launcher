@@ -223,6 +223,26 @@ object Weather {
 data class NextEvent(val id: Long, val begin: Long, val end: Long, val title: String, val location: String?)
 
 object Agenda {
+    /** A [from]–[to] között kezdődő (nem egész napos) események kezdőidőpontjai. */
+    fun begins(ctx: Context, from: Long, to: Long): List<Long> {
+        val b = CalendarContract.Instances.CONTENT_URI.buildUpon()
+        ContentUris.appendId(b, from)
+        ContentUris.appendId(b, to)
+        val sel = "${CalendarContract.Instances.ALL_DAY} = 0 AND " +
+            "${CalendarContract.Instances.VISIBLE} = 1 AND " +
+            "${CalendarContract.Instances.BEGIN} >= ? AND " +
+            "${CalendarContract.Instances.BEGIN} < ? AND " +
+            "${CalendarContract.Instances.SELF_ATTENDEE_STATUS} != ${CalendarContract.Attendees.ATTENDEE_STATUS_DECLINED}"
+        val out = mutableListOf<Long>()
+        try {
+            ctx.contentResolver.query(
+                b.build(), arrayOf(CalendarContract.Instances.BEGIN), sel,
+                arrayOf(from.toString(), to.toString()), "${CalendarContract.Instances.BEGIN} ASC",
+            )?.use { c -> while (c.moveToNext()) out.add(c.getLong(0)) }
+        } catch (_: Exception) {}
+        return out
+    }
+
     fun next(ctx: Context): NextEvent? {
         val now = System.currentTimeMillis()
         return between(ctx, now, now + 24 * 60 * 60_000L)

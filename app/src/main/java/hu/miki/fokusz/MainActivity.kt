@@ -141,6 +141,10 @@ class MainActivity : Activity() {
     private lateinit var bookAll: TextView
     private var bookOffset = 0
     private lateinit var playBtn: MediaButton
+    private lateinit var mediaRow: LinearLayout
+    private lateinit var sayingBox: LinearLayout
+    private lateinit var dimLayer: View
+    private var departure = false
     private var bookShown: BookNote? = null
 
     private var apps: List<AppEntry> = emptyList()
@@ -188,6 +192,8 @@ class MainActivity : Activity() {
         buildPanel()
         val full = FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT)
         root.addView(home, full)
+        dimLayer = View(this).apply { setBackgroundColor(Color.BLACK); alpha = 0f }
+        root.addView(dimLayer, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(drawer, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(csend, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
         root.addView(note, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
@@ -306,6 +312,7 @@ class MainActivity : Activity() {
         }
         topRow.addView(seasonText, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
         val media = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        mediaRow = media
         fun mbtn(kind: Int, key: Int, desc: String) = MediaButton(this, kind, MUTED).apply {
             contentDescription = desc
             isClickable = true
@@ -376,6 +383,7 @@ class MainActivity : Activity() {
             isClickable = true
             setOnClickListener { showSaying() }
         }
+        sayingBox = saying
         sayingJp = label("", 17f, Typeface.create(Typeface.SERIF, Typeface.NORMAL), GOLD)
         sayingHu = label("", 16f, fItal, MUTED)
         saying.addView(sayingJp, lp())
@@ -399,13 +407,36 @@ class MainActivity : Activity() {
 
     private fun refreshEvent() {
         val ok = checkSelfPermission(Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
-        nextEvent = if (ok) Agenda.next(this) else null
+        nextEvent = if (ok && shown("event")) Agenda.next(this) else null
         val e = nextEvent
+        departure = false
         if (e == null) {
             eventText.visibility = View.GONE
+            return
+        }
+        val now = System.currentTimeMillis()
+        val place = e.location?.substringBefore(',')?.trim()
+        if (place != null && e.begin > now && e.begin - now <= 30 * 60_000L) {
+            departure = true
+            val hm = SimpleDateFormat("H:mm", Locale("hu")).format(Date(e.begin))
+            eventText.text = "Indulás: $hm · $place  →"
+            eventText.setTextColor(GOLD)
         } else {
             eventText.text = Agenda.format(e, prefs.getBoolean("cal_discreet", false))
-            eventText.visibility = View.VISIBLE
+            eventText.setTextColor(MUTED2)
+        }
+        eventText.visibility = View.VISIBLE
+    }
+
+    /** Navigáció a következő esemény helyszínére (Waze, ha van). */
+    private fun navigateToEvent() {
+        val loc = nextEvent?.location ?: return
+        val q = Uri.encode(loc)
+        val waze = Intent(Intent.ACTION_VIEW, Uri.parse("https://waze.com/ul?q=$q&navigate=yes"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (apps.any { it.pkg == "com.waze" }) waze.setPackage("com.waze")
+        try { startActivity(waze) } catch (_: Exception) {
+            safeStart(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$q")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }
     }
 
@@ -416,6 +447,7 @@ class MainActivity : Activity() {
     }
 
     private fun openEvent() {
+        if (departure) { navigateToEvent(); return }
         val e = nextEvent ?: return
         val i = Intent(Intent.ACTION_VIEW, ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, e.id))
             .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, e.begin)
@@ -622,6 +654,7 @@ class MainActivity : Activity() {
             val first = if (calOk) Agenda.between(this, start, end) else null
             greetLine(first?.let { "Holnap első: ${Agenda.short(it, discreet)}" } ?: "Holnapra nincs naptárbejegyzés.", 21f, fMed, INK, 0)
             Weather.tomorrow(this)?.let { greetLine("Holnap: $it", 20f, fMed, MUTED, 10) }
+            if (Calendar.getInstance().get(Calendar.DAY_OF_WEEK) == Calendar.SUNDAY && calOk) weekPreview()
         }
         greetLine(saying.jp, 18f, Typeface.create(Typeface.SERIF, Typeface.NORMAL), GOLD, 36)
         greetLine(saying.hu, 18f, fItal, MUTED, 4)
@@ -631,6 +664,28 @@ class MainActivity : Activity() {
         greet.animate().alpha(1f).setDuration(300).start()
         handler.removeCallbacks(autoHideGreet)
         handler.postDelayed(autoHideGreet, 25_000)
+    }
+
+    /** Vasárnap esti hét-előzetes: hány esemény jön, melyik nap a legsűrűbb, mennyi arany pötty volt. */
+    private fun weekPreview() {
+        val names = arrayOf("hétfő", "kedd", "szerda", "csütörtök", "péntek", "szombat", "vasárnap")
+        val counts = IntArray(7)
+        for (d in 0 until 7) {
+            val (s0, e0) = Agenda.dayBounds(d + 1)
+            counts[d] = Agenda.begins(this, s0, e0).size
+        }
+        val total = counts.sum()
+        val gold = Chain.week(this).first.count { it }
+        greetBox.addView(View(this).apply { setBackgroundColor(Color.parseColor("#2E2B27")) },
+            LinearLayout.LayoutParams(MATCH_PARENT, dp(1)).apply { topMargin = dp(24); bottomMargin = dp(16) })
+        greetLine("JÖVŐ HÉT", 13f, fSemi, GOLD, 0)
+        if (total == 0) {
+            greetLine("Még nincs naptárbejegyzés.", 19f, fMed, MUTED, 8)
+        } else {
+            val busiest = counts.indices.maxByOrNull { counts[it] } ?: 0
+            greetLine("$total esemény · a legsűrűbb: ${names[busiest]} (${counts[busiest]})", 19f, fMed, INK, 8)
+        }
+        greetLine("Ezen a héten $gold arany pötty.", 17f, fItal, MUTED, 6)
     }
 
     private val autoHideGreet = Runnable { hideGreet() }
@@ -1056,16 +1111,39 @@ class MainActivity : Activity() {
         } catch (_: Exception) {}
         noteInput.setText("")
         hideNote()
-        // 3) átadás a Keepnek
-        sendToKeep(text)
+        // 3) ha van benne nap/időpont: naptárba is?
+        val at = NoteTime.parse(text)
+        if (at == null) { sendToKeep(text); return }
+        val whenText = SimpleDateFormat("EEEE H:mm", Locale("hu")).format(Date(at))
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Naptárba is?")
+            .setMessage("$whenText\n\n$text")
+            .setPositiveButton("Naptárba is") { _, _ -> sendToKeep(text, calendarAt = at) }
+            .setNegativeButton("Csak Keep") { _, _ -> sendToKeep(text) }
+            .show()
     }
 
-    private fun sendToKeep(text: String) {
+    private fun sendToKeep(text: String, calendarAt: Long? = null) {
         val send = Intent(Intent.ACTION_SEND).setType("text/plain")
             .putExtra(Intent.EXTRA_TEXT, text)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         val keepIntent = Intent(send).setPackage("com.google.android.keep")
-        val ok = try { startActivity(keepIntent); true } catch (_: Exception) { false }
+        val cal = calendarAt?.let { at ->
+            Intent(Intent.ACTION_INSERT, CalendarContract.Events.CONTENT_URI)
+                .putExtra(CalendarContract.Events.TITLE, text.lineSequence().first().take(80))
+                .putExtra(CalendarContract.Events.DESCRIPTION, text)
+                .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, at)
+                .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, at + 30 * 60_000L)
+                .apply { if (apps.any { it.pkg == "com.google.android.calendar" }) setPackage("com.google.android.calendar") }
+        }
+        // a naptár kerül felülre, utána a Keep jön elő
+        val ok = try {
+            if (cal != null) startActivities(arrayOf(keepIntent, cal)) else startActivity(keepIntent)
+            true
+        } catch (_: Exception) {
+            if (cal != null) safeStart(cal.setPackage(null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            false
+        }
         if (!ok) {
             try { startActivity(Intent.createChooser(send, "Jegyzet mentése").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
             catch (_: Exception) {}
@@ -1076,7 +1154,7 @@ class MainActivity : Activity() {
     private fun refreshTime() {
         clock.invalidate()
         val date = SimpleDateFormat("EEEE · MMMM d.", Locale("hu")).format(Date())
-        dateText.text = Weather.cached(this)?.let { "$date · $it" } ?: date
+        dateText.text = (if (shown("weather")) Weather.cached(this) else null)?.let { "$date · $it" } ?: date
         refreshEvent()
         refreshFocus()
         refreshSaying()
@@ -1084,8 +1162,56 @@ class MainActivity : Activity() {
         refreshChain()
         refreshBattery()
         refreshMedia()
+        applyVisibility()
+        refreshDim()
         updateCsend()
         updateCar()
+    }
+
+    // ---------- mi látszódjon ----------
+
+    private val toggles = listOf(
+        "season" to "Mikroévszak",
+        "media" to "Zenevezérlő",
+        "chain" to "Fókusz-lánc (pöttyök)",
+        "weather" to "Időjárás",
+        "event" to "Következő esemény",
+        "saying" to "Japán gondolat",
+        "dim" to "Esti halványítás",
+    )
+
+    private fun shown(key: String) = prefs.getBoolean("show_$key", true)
+
+    private fun applyVisibility() {
+        seasonText.visibility = if (shown("season")) View.VISIBLE else View.INVISIBLE
+        mediaRow.visibility = if (shown("media")) View.VISIBLE else View.GONE
+        dots.visibility = if (shown("chain")) View.VISIBLE else View.GONE
+        sayingBox.visibility = if (shown("saying")) View.VISIBLE else View.GONE
+    }
+
+    private fun pickVisible() {
+        val labels = toggles.map { it.second }.toTypedArray()
+        val checked = toggles.map { shown(it.first) }.toBooleanArray()
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setTitle("Mi látszódjon?")
+            .setMultiChoiceItems(labels, checked) { _, w, on ->
+                prefs.edit().putBoolean("show_${toggles[w].first}", on).apply()
+            }
+            .setPositiveButton("Kész") { _, _ -> refreshTime() }
+            .setOnDismissListener { refreshTime() }
+            .show()
+    }
+
+    // ---------- esti halványítás ----------
+
+    /** A Csend mód előtti órában a kezdőképernyő fokozatosan sötétedik. */
+    private fun refreshDim() {
+        val on = prefs.getBoolean("csend_on", true) && shown("dim")
+        val start = prefs.getInt("csend_start", 22 * 60)
+        val c = Calendar.getInstance()
+        val now = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE)
+        val before = (start - now + 24 * 60) % (24 * 60) // perc a Csendig
+        dimLayer.alpha = if (on && before in 1..60) (60 - before) / 60f * 0.45f else 0f
     }
 
     // ---------- mikroévszak ----------
@@ -1544,6 +1670,7 @@ class MainActivity : Activity() {
             "Naptár: ${if (prefs.getBoolean("cal_discreet", false)) "diszkrét (csak idő és hely)" else "teljes"}",
             "Naptár hozzáférés",
             "Autós mód: ${prefs.getString("car_name", null) ?: "nincs beállítva"}",
+            "Mi látszódjon?",
             "Háttérkép beállítása",
             "Kezdőképernyő-app választása",
         )
@@ -1562,8 +1689,9 @@ class MainActivity : Activity() {
                         safeStart(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
                     else requestPermissions(arrayOf(Manifest.permission.READ_CALENDAR), 1)
                     5 -> pickCar()
-                    6 -> safeStart(Intent.createChooser(Intent(Intent.ACTION_SET_WALLPAPER), "Háttérkép"))
-                    7 -> safeStart(Intent(Settings.ACTION_HOME_SETTINGS))
+                    6 -> pickVisible()
+                    7 -> safeStart(Intent.createChooser(Intent(Intent.ACTION_SET_WALLPAPER), "Háttérkép"))
+                    8 -> safeStart(Intent(Settings.ACTION_HOME_SETTINGS))
                 }
             }
             .show()
